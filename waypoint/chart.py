@@ -1,10 +1,11 @@
-"""Build the chart: dashboard.json (contract) and DASHBOARD.md (presentation). LOGBOOK-SPEC §4–§5."""
+"""Build the chart: dashboard.json (contract), DASHBOARD.md and chart.html (presentation). LOGBOOK-SPEC §4–§5."""
 import json
 import os
 import re
 import tempfile
 import time
 from datetime import date, datetime, timedelta
+from importlib import resources
 from pathlib import Path
 from urllib.parse import quote
 
@@ -210,6 +211,19 @@ def render_md(d):
     return "\n".join(out)
 
 
+# --- HTML rendering (§5.2): the template reads the dashboard from an inert JSON block ---------------------------
+
+_SLOT = '<script type="application/json" id="waypoint-data">null</script>'
+# no data can close the script element or start a comment; U+2028/U+2029 are escaped for old JS parsers
+_JSON_SAFE = {ord(c): "\\u%04x" % ord(c) for c in "<>&\u2028\u2029"}
+
+
+def render_html(d):
+    page = resources.files("waypoint").joinpath("templates", "chart.html").read_text(encoding="utf-8")
+    data = json.dumps(d, ensure_ascii=False, separators=(",", ":")).translate(_JSON_SAFE)
+    return page.replace(_SLOT, _SLOT.replace(">null<", f">{data}<"), 1)
+
+
 def _atomic_write(path: Path, text: str):
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
     try:
@@ -232,3 +246,4 @@ def write(logbook: Path, d):
     with _Lock(logbook / ".waypoint.lock"):
         _atomic_write(logbook / "dashboard.json", json.dumps(d, ensure_ascii=False, indent=1))
         _atomic_write(logbook / "DASHBOARD.md", render_md(d))
+        _atomic_write(logbook / "chart.html", render_html(d))

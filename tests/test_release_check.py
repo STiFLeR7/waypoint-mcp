@@ -12,11 +12,12 @@ class TreeNames(unittest.TestCase):
     def test_secrets_local_config_and_logbook_data_are_refused(self):
         bad = [".env", "beacon/.env.production", "beacon/.dev.vars", "beacon/wrangler.local.jsonc", ".private-patterns",
                "keys/deploy.pem", "projects/customer.md", "logbook/projects/_archive/old.md", "DASHBOARD.md",
-               "data/dashboard.json", ".waypoint.lock"]
+               "data/dashboard.json", ".waypoint.lock", "chart.html", "logbook/chart.html"]
         self.assertEqual(len(rc.check_names(bad)), len(bad))
 
     def test_the_example_logbook_and_templates_are_allowed(self):
-        ok = ["examples/logbook/projects/aurora.md", "examples/logbook/DASHBOARD.md", "examples/logbook/dashboard.json",
+        ok = ["examples/logbook/projects/aurora.md", "examples/logbook/DASHBOARD.md", "examples/logbook/dashboard.json", "examples/logbook/chart.html",
+              "waypoint/templates/chart.html",
               "waypoint/templates/logbook/_template.md", "beacon/wrangler.jsonc", "docs/PRIVACY.md", "README.md"]
         self.assertEqual(rc.check_names(ok), [])
 

@@ -20,7 +20,7 @@ $ waypoint fix
 Fix taken (sync): 3 voyages (projects), 1 underway (active) this week, 1 hazard (attention item), 1 with unlogged watches (sessions), 1 adrift (stale), 1 uncharted (untracked folders).
 ```
 
-That's the fictional logbook in [`examples/logbook/`](examples/logbook/): its [chart](examples/logbook/DASHBOARD.md) shows each case.
+That's the fictional logbook in [`examples/logbook/`](examples/logbook/): its [chart](examples/logbook/DASHBOARD.md) shows each case. `waypoint fix` also writes `chart.html`, the same chart as a page you open in your browser.
 
 ## Take a fix
 
@@ -31,7 +31,7 @@ Requires Python 3.11 or newer; no other dependencies.
 pipx install waypoint-mcp         # or: python -m pip install waypoint-mcp
 waypoint setup                    # fitting out: logbook, roots, the rule and MCP server for each AI CLI it finds
 waypoint add ~/code/my-project    # chart a voyage (project); once per project
-waypoint fix                      # take a fix (sync): redraws DASHBOARD.md and dashboard.json
+waypoint fix                      # take a fix (sync): redraws DASHBOARD.md, dashboard.json and chart.html (--open opens it)
 ```
 
 **Windows (PowerShell)**

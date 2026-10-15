@@ -2,7 +2,7 @@
 
   waypoint setup                   guided: logbook, roots, and the rule for the AI CLIs it finds
   waypoint add <folder>            chart a voyage: create the project's file
-  waypoint fix                     take a fix: harvest the facts, redraw the chart (DASHBOARD.md + dashboard.json)
+  waypoint fix                     take a fix: harvest the facts, redraw the chart (DASHBOARD.md, dashboard.json, chart.html)
   waypoint connect <cli>           wire one AI CLI: its rule and the local MCP server (or print its config)
   waypoint rules [--install|--uninstall]   show, check, install or remove the global rule
   waypoint init <dir>              scaffold a logbook (setup does this for you)
@@ -13,6 +13,7 @@ import re
 import shutil
 import subprocess
 import sys
+import webbrowser
 from importlib import resources
 from pathlib import Path
 
@@ -225,9 +226,17 @@ def cmd_fix(a):
         print(f"Fix taken (sync): {voyages}, {k['velocity']} underway (active) this week, {hazards}, "
               f"{k['unlogged']} with unlogged watches (sessions), {k['stale']} adrift (stale), "
               f"{k['untracked']} uncharted (untracked folders).")
+    page = (lb / "chart.html").resolve()
+    print(f"Chart (dashboard) for your browser: {page}")
+    if a.open and not webbrowser.open(page.as_uri()):
+        print("Couldn't open a browser; open the file above yourself.")
     if a.push:
         # only the logbook's own data: project files and the chart, never unrelated files in the folder
-        paths = ("projects", "DASHBOARD.md", "dashboard.json")
+        paths = ("projects", "DASHBOARD.md", "dashboard.json", "chart.html")
+        ignored = _git(lb, "check-ignore", "--", *paths)  # 0 = some ignored, 1 = none, else error
+        if ignored.returncode not in (0, 1):
+            _ok(ignored, "git check-ignore")
+        paths = tuple(p for p in paths if p not in ignored.stdout.split())  # e.g. a user who keeps chart.html local
         _ok(_git(lb, "add", "--", *paths), "git add")
         diff = _git(lb, "diff", "--cached", "--quiet", "--", *paths)  # 0 = no changes, 1 = changes, else error
         if diff.returncode == 0:
@@ -440,6 +449,7 @@ def main(argv=None):
     f = sub.add_parser("fix", help="take a fix: harvest the facts, redraw the chart")
     f.add_argument("--logbook", help=lb_help)
     f.add_argument("--push", action="store_true", help="git pull first, then commit and push the logbook")
+    f.add_argument("--open", action="store_true", help="open chart.html in your browser")
     f.add_argument("--home", help=argparse.SUPPRESS)
     f.set_defaults(func=cmd_fix)
 

@@ -2,6 +2,7 @@
 import io
 import json
 import os
+import re
 import sqlite3
 import tempfile
 import unittest
@@ -23,6 +24,11 @@ def ts(y, m, d, h=12):
     return datetime(y, m, d, h).timestamp()
 
 
+def embedded(page):
+    """The dashboard as the page's JSON.parse would read it."""
+    return json.loads(page.split('<script type="application/json" id="waypoint-data">', 1)[1].split("</script>", 1)[0])
+
+
 def project(path, status="active", now="", log="", extra=""):
     return f"# x\n- Path: {path}\n- Status: {status}\n- Summary: s\n- Docs: a.md, docs/b.md\n{extra}\n## Now\n{now}\n## Log\n{log}"
 
@@ -38,6 +44,9 @@ class Env(unittest.TestCase):
                   self.lb / "projects" / "_archive"):
             d.mkdir(parents=True, exist_ok=True)
         (self.lb / "waypoint.toml").write_text(f"roots = [{json.dumps(str(self.root))}]\n", encoding="utf-8")
+        detected = patch("waypoint.clis.detected", return_value=[])  # results never depend on the AI CLIs installed here
+        detected.start()
+        self.addCleanup(detected.stop)
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -167,6 +176,7 @@ class ProjectFileRobustness(Env):
         try:
             with watch._Lock(self.lb / ".waypoint.lock"), self.assertRaises(watch.WatchError):
                 chart.write(self.lb, d)
+            self.assertFalse((self.lb / "chart.html").exists())  # chart.html is published under the same lock
         finally:
             watch.LOCK_WAIT = old
 
@@ -401,7 +411,36 @@ class Chart(ChartEnv):
         self.assertIn(r"&lt;b&gt;raw&lt;/b&gt; \| title", md)
         self.assertIn("fix CI", md)
         self.assertEqual(json.loads((self.lb / "dashboard.json").read_text(encoding="utf-8"))["schema"], 1)
+        self.assertEqual(embedded((self.lb / "chart.html").read_text(encoding="utf-8")), d)  # written with the pair
         self.assertFalse(list(self.lb.glob(".*.tmp")))
+
+    def test_html_embeds_the_dashboard_inertly(self):
+        d = self.build()
+        hostile = "</script><script>alert(1)</script><img src=x onerror=alert(1)><!-- & \u2028\u2029 </SCRIPT >"
+        d["projects"][0]["summary"] = d["projects"][0]["name"] = hostile
+        d["feed"].append({"ts": 0, "tool": "codex", "kind": "session", "project": hostile, "text": hostile})
+        page = chart.render_html(d)
+        template = chart.resources.files("waypoint").joinpath("templates", "chart.html").read_text(encoding="utf-8")
+        self.assertEqual(page.lower().count("</script"), template.lower().count("</script"))  # nothing closes early
+        data = page.split('id="waypoint-data">', 1)[1].split("</script>", 1)[0]
+        for c in "<>&\u2028\u2029":
+            self.assertNotIn(c, data)
+        self.assertEqual(json.loads(data), d)  # JSON.parse gives back the same document
+        self.assertEqual(embedded(page), d)
+
+    def test_spec_shows_the_html_escape_sequences(self):
+        spec = (Path(__file__).resolve().parents[1] / "docs" / "LOGBOOK-SPEC.md").read_text(encoding="utf-8")
+        self.assertIn(r"written as `\u003c`, `\u003e`, `\u0026`, `\u2028` and `\u2029`", spec)
+        self.assertFalse({"\u2028", "\u2029"} & set(spec))
+
+    def test_html_template_is_package_data_and_offline(self):
+        from importlib import resources
+        t = resources.files("waypoint").joinpath("templates", "chart.html").read_text(encoding="utf-8")
+        self.assertIn(chart._SLOT, t)
+        self.assertIn('"templates/*.html"', (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text(encoding="utf-8"))
+        self.assertEqual(set(re.findall(r"https?://[^'\"\s)]+", t)), {"http://www.w3.org/2000/svg"})  # a namespace, not a request
+        self.assertIn("default-src 'none'", t)
+        self.assertNotRegex(t, r"(?i)innerHTML|outerHTML|insertAdjacentHTML|document\.write|eval\(|fetch\(|XMLHttpRequest|sample")
 
     def test_bad_sources_never_stop_the_chart(self):
         (self.home / ".claude" / "history.jsonl").write_text("garbage\n[1,2]\n", encoding="utf-8")
@@ -450,6 +489,7 @@ class Cli(unittest.TestCase):
         }
         for count in (0, 1, 2):
             with self.subTest(count=count), tempfile.TemporaryDirectory() as t:
+                page = f"Chart (dashboard) for your browser: {(Path(t) / 'lb' / 'chart.html').resolve()}\n"
                 lb = Path(t) / "lb"
                 with redirect_stdout(io.StringIO()):
                     cli.main(["init", str(lb)])
@@ -459,7 +499,7 @@ class Cli(unittest.TestCase):
                 out = io.StringIO()
                 with redirect_stdout(out):
                     cli.main(["fix", "--logbook", str(lb), "--home", str(Path(t) / "home")])
-                self.assertEqual(out.getvalue(), expected[count])  # story term paired with its plain term (STORY.md)
+                self.assertEqual(out.getvalue(), expected[count] + page)  # story term paired with its plain term (STORY.md)
 
     def test_init_then_fix(self):
         with tempfile.TemporaryDirectory() as t:
@@ -470,8 +510,13 @@ class Cli(unittest.TestCase):
                 cli.main(["fix", "--logbook", str(lb), "--home", str(Path(t) / "home")])
             self.assertEqual(load(lb).roots, [str(lb.resolve().parent)])  # resolved: Windows runners use 8.3 temp names
             for f in ("AGENTS.md", "CLAUDE.md", "GLOBAL-RULES.md", "projects/_template.md", "projects/_ignore.txt",
-                      "DASHBOARD.md", "dashboard.json"):
+                      "DASHBOARD.md", "dashboard.json", "chart.html"):
                 self.assertTrue((lb / f).exists(), f)
+            d = embedded((lb / "chart.html").read_text(encoding="utf-8"))  # an empty logbook embeds an empty chart
+            self.assertEqual((d["projects"], d["archived"], d["untracked"]), ([], [], []))
+            with patch("webbrowser.open", return_value=True) as opened, redirect_stdout(io.StringIO()):
+                cli.main(["fix", "--logbook", str(lb), "--home", str(Path(t) / "home"), "--open"])
+            opened.assert_called_once_with((lb / "chart.html").resolve().as_uri())
             self.assertEqual(logbook.load_projects(lb), [])  # _template.md is not a project and has no log entry
 
 
@@ -601,9 +646,24 @@ class InitAndPush(unittest.TestCase):
                 os.environ.update(old)
             committed = g("show", "--name-only", "--format=", "HEAD", cwd=lb).stdout.split()
             self.assertIn("dashboard.json", committed)
+            self.assertIn("chart.html", committed)
             self.assertNotIn("secret-notes.txt", committed)
             self.assertNotIn("staged-by-user.txt", committed)
             self.assertIn("staged-by-user.txt", g("diff", "--cached", "--name-only", cwd=lb).stdout)  # still staged
+            # a user who gitignores chart.html can still push the rest
+            g("rm", "-q", "--cached", "chart.html", cwd=lb)
+            (lb / ".gitignore").write_text("chart.html\n", encoding="utf-8")
+            (lb / "projects" / "new.md").write_text("# new\n", encoding="utf-8")
+            os.environ.update(env)
+            try:
+                with redirect_stdout(io.StringIO()):
+                    cli.main(["fix", "--logbook", str(lb), "--push", "--home", str(Path(t) / "home")])
+            finally:
+                os.environ.clear()
+                os.environ.update(old)
+            committed = g("show", "--name-only", "--format=", "HEAD", cwd=lb).stdout.split()
+            self.assertIn("projects/new.md", committed)
+            self.assertNotIn("chart.html", committed)
 
 
 if __name__ == "__main__":

@@ -28,10 +28,10 @@ GENERIC = [
 # what the wheel and sdist may contain (sdist paths are relative to its top folder)
 WHEEL_OK = re.compile(r"^(waypoint/.*|waypoint_mcp-[^/]+\.dist-info/.*)$")
 SDIST_OK = re.compile(r"^(waypoint/.*|tests/test_[a-z_]+\.py|waypoint_mcp\.egg-info/.*|PKG-INFO|pyproject\.toml|setup\.cfg|README\.md|LICENSE)$")
-NEVER = re.compile(r"(^|/)(projects/[^_]|DASHBOARD\.md$|dashboard\.json$|beacon/|docs/reviews/|wrangler\.local|\.dev\.vars|\.env)")
+NEVER = re.compile(r"(^|/)(projects/[^_]|DASHBOARD\.md$|dashboard\.json$|(?<!waypoint/templates/)chart\.html$|beacon/|docs/reviews/|wrangler\.local|\.dev\.vars|\.env)")
 # files the public tree must never hold (the fictional example logbook is the one allowed logbook)
 TREE_NEVER = re.compile(r"(^|/)(\.env(\..*)?|\.dev\.vars|wrangler\.local\.jsonc?|\.private-patterns|[^/]*\.(pem|key|p12)"
-                        r"|projects/[^_/][^/]*\.md|projects/_archive/[^/]+\.md|DASHBOARD\.md|dashboard\.json|\.waypoint\.lock)$")
+                        r"|projects/[^_/][^/]*\.md|projects/_archive/[^/]+\.md|DASHBOARD\.md|dashboard\.json|(?<!waypoint/templates/)chart\.html|\.waypoint\.lock)$")
 EXAMPLE = "examples/logbook/"
 # the maintainer's history (paths, reviews of private work): kept in the private repo, not shipped publicly
 PRIVATE_ONLY = ("docs/reviews/", "docs/research/", "docs/PLAN.md", "docs/ui/HANDOFF-CHATGPT.md")

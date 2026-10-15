@@ -26,7 +26,7 @@ The user tracks every project in a logbook at `{logbook}`. In any session, follo
 
 ## Never
 - Never change a project's Status, archive it or delete it without the user's say-so. The lifecycle is `active` → `occasional` → `paused` → `done`, or moving the file to `projects/_archive/`. Projects idle over 21 days (active) or 60 days (occasional) are flagged, not changed.
-- Never edit `DASHBOARD.md` or `dashboard.json`; they're generated.
+- Never edit `DASHBOARD.md`, `dashboard.json` or `chart.html`; they're generated.
 - Never track or ignore an untracked folder without asking. `projects/_ignore.txt` lists folders that aren't projects.
 
 ## Status requests ("where am I?", "what's going stale?")

@@ -49,6 +49,8 @@ def main():
         assert (lb / "projects" / "_template.md").exists()
         run(exe["waypoint"], "add", str(code / "alpha"), "--logbook", str(lb), cwd=elsewhere)
         assert "Fix taken" in run(exe["waypoint"], "fix", "--logbook", str(lb), "--home", str(home), cwd=elsewhere)
+        page = (lb / "chart.html").read_text(encoding="utf-8")  # the template shipped as package data
+        assert '<script type="application/json" id="waypoint-data">{"schema":1,' in page, page[:200]
 
         ok, bad_tool, bad_project, too_long, fix = mcp(exe["waypoint-mcp"], lb, elsewhere,
             ("log_watch", {"project": "alpha", "summary": "smoke test entry", "tool": "codex"}),

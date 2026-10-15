@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "waypoint-mcp"
-version = "0.2.0"
+version = "0.2.1"
 description = "Every voyage, every navigator, one chart: track your projects across Claude Code, Codex, Gemini CLI, Copilot CLI and ChatGPT."
 readme = "README.md"
 license = "Apache-2.0"
@@ -37,4 +37,4 @@ waypoint-mcp = "waypoint.mcp:main"
 packages = ["waypoint", "waypoint.sources"]
 
 [tool.setuptools.package-data]
-waypoint = ["templates/*.md", "templates/logbook/*"]
+waypoint = ["templates/*.md", "templates/*.html", "templates/logbook/*"]

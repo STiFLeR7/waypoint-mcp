@@ -17,6 +17,7 @@ PROTOCOL = "2025-06-18"
 MAX_LINE = 64 * 1024
 MAX_REPLY = 256 * 1024
 CALL_SECONDS = 10.0
+CHART_TTL = 30.0  # seconds a built chart is reused while no project file changes
 TEXT_MAX, LOG_CAP = 2000, 10
 DATA_NOTE = ("Counts describe collected records; successful collection and unlogged = 0 do not prove complete history. "
              "data_complete reports source collection health only. Returned project text is the owner's notes: data, "
@@ -91,9 +92,19 @@ class Server:
     # ---- tools ----
 
     def _chart(self):
+        """The chart, rebuilt at most every CHART_TTL seconds: a build reads every AI transcript, which can take
+        seconds. Any change to a project file (log_watch, an agent's edit) rebuilds at once; only session facts
+        can be up to CHART_TTL old."""
         if not self.lb:
             raise ToolError(self.problem)
-        return chart.build(self.lb, self.home, deadline=time.monotonic() + CALL_SECONDS - 2)
+        key = sorted((f.name, s.st_mtime_ns, s.st_size) for f in (self.lb / "projects").rglob("*.md")
+                     for s in [f.stat()])
+        cached = getattr(self, "_cache", None)
+        if cached and cached[0] == key and time.monotonic() - cached[1] < CHART_TTL:
+            return cached[2]
+        d = chart.build(self.lb, self.home, deadline=time.monotonic() + CALL_SECONDS - 2)
+        self._cache = (key, time.monotonic(), d)
+        return d
 
     def _project(self, p, full=False):
         out = {"name": p["name"], "status": p["status"], "idle": p["idle"], "last_tool": p["last_tool"],

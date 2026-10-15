@@ -89,6 +89,21 @@ class Protocol(Base):
 
 
 class Reads(Base):
+    def test_chart_is_reused_until_a_project_file_changes_or_it_expires(self):
+        s = mcp.Server(self.lb, home=self.home)
+        real = mcp.chart.build
+        with patch.object(mcp.chart, "build", side_effect=real) as build:
+            s.take_fix({})
+            s.read_chart({"project": "alpha"})
+            self.assertEqual(build.call_count, 1)  # the second read reuses the chart
+            s.log_watch({"project": "alpha", "summary": "cache check", "tool": "codex"})
+            logs = s.read_chart({"project": "alpha"})["logs"]
+            self.assertEqual(build.call_count, 2)  # the write changed the file: rebuilt at once
+            self.assertEqual(logs[0]["text"], "cache check")
+            with patch.object(mcp.time, "monotonic", return_value=mcp.time.monotonic() + mcp.CHART_TTL + 1):
+                s.take_fix({})
+            self.assertEqual(build.call_count, 3)  # expired: session facts refresh
+
     def test_take_fix_fields_and_privacy(self):
         r = self.session(call(1, "take_fix", {}))[0]
         body = json.loads(text_of(r))

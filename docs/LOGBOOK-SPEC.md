@@ -3,7 +3,7 @@
 The **logbook** is the contract every tool (Claude Code, Codex, ChatGPT, or you) agrees on. It's plain files in a folder, ideally a private git repo. Tools write project files following these rules.
 
 **Who writes what (v1.1).** Nothing else writes to a logbook or to a tool's files:
-- `waypoint fix` writes only the two chart files (§5).
+- `waypoint fix` writes only the chart files (§5).
 - `waypoint add` creates one project file from the template, with no log entry, and never overwrites (§1).
 - `waypoint init` / `setup` create missing logbook files; `setup` also records which logbook to use (§6).
 - Agents, following the rule (§7), append log entries and maintain `## Now` and `- Attention:` lines. They never change Status and never archive without the user's say-so.
@@ -26,7 +26,8 @@ Key words: **must**, **should** and **may** carry their usual RFC meaning. Story
 │   ├── _ignore.txt        # folders that are not projects (§4.3)
 │   └── _archive/<name>.md # archived projects (moved here, never deleted)
 ├── DASHBOARD.md           # chart for people (generated, never edit)
-└── dashboard.json         # chart for programs (generated, never edit)
+├── dashboard.json         # chart for programs (generated, never edit)
+└── chart.html             # chart for a browser (generated, never edit)
 ```
 
 - A project's **name** is its file stem, case preserved. Files starting with `_` are not projects.
@@ -135,11 +136,11 @@ Mapped folders (§4.2) with a Claude Code or Codex session within `untracked_day
 
 ## 5. The chart (generated)
 
-The engine writes `DASHBOARD.md` (for people) and `dashboard.json` (for programs) from the same data, each **atomically** (temp file plus rename).
-- Both files carry the same `generated` time.
+The engine writes `DASHBOARD.md` (for people), `dashboard.json` (for programs) and `chart.html` (for a browser, §5.2) from the same data, each **atomically** (temp file plus rename).
+- All three carry the same `generated` time.
 - Readers may briefly see two different generations and should compare `generated` if that matters.
-- Concurrent publishers for the same logbook must serialize publication of the pair with a bounded wait. Individual replacements remain atomic; an interrupted publication or failure of the second replacement must be reported rather than described as a fully published chart.
-- `DASHBOARD.md`'s layout is presentation, not contract. `dashboard.json` is the contract.
+- Concurrent publishers for the same logbook must serialize publication of the chart files with a bounded wait. Individual replacements remain atomic; an interrupted publication or failure of a later replacement must be reported rather than described as a fully published chart.
+- `DASHBOARD.md`'s and `chart.html`'s layouts are presentation, not contract. `dashboard.json` is the contract.
 
 ### 5.1 `dashboard.json`, schema v1
 ```jsonc
@@ -176,6 +177,14 @@ The engine writes `DASHBOARD.md` (for people) and `dashboard.json` (for programs
   - `archived`: by name.
 - **Untrusted text:** session titles are raw prompts, and summaries and log text are free text. Every renderer (Markdown or UI) must escape them. They may appear in the **local** chart; for remote access see §8.
 
+### 5.2 `chart.html`
+A single self-contained page, opened straight from disk (`file://`).
+- It embeds the same document as `dashboard.json` in `<script type="application/json" id="waypoint-data">`. In that copy, `<`, `>`, `&`, U+2028 and U+2029 are written as `\u003c`, `\u003e`, `\u0026`, `\u2028` and `\u2029`, so no value can end the element. `JSON.parse` of the element's text gives back the dashboard.
+- The page renders every value as text, never as HTML. It makes no network requests and loads nothing from outside the file; a Content-Security-Policy enforces this.
+- It shows only the embedded data. It may also open another `dashboard.json` the user picks; it never writes files.
+- An empty logbook shows an empty state, not sample data.
+- `waypoint fix --open` opens the page in the default browser.
+
 ## 6. `waypoint.toml`
 
 Configuration is validated before collection: roots are nonempty path strings in a list; thresholds are nonnegative integers for `active` and `occasional` only. `untracked_days` is an integer from 1 to 3650, `pulse_days` from 1 to 365, and `feed_max` from 1 to 1000. Invalid types, unsupported threshold statuses, and out-of-range values produce an actionable configuration error.
@@ -211,7 +220,7 @@ Every key is optional and the defaults are shown above. `roots` defaults to the 
 ### 8.1 Remote (beacon, Phase 5)
 - **Who:** every request must be authenticated through OAuth, and only an allowlist of identities is accepted. The allowlist **fails closed**: unset, empty, or containing any malformed entry, it admits nobody. No anonymous access.
 - OAuth network requests have bounded timeouts. Failed exchanges return a safe recovery response without exposing credentials or accepting an unauthenticated identity.
-- A supplied MCP protocol-version header must be supported; invalid or unsupported values are rejected before dispatch. When absent, the server uses its documented compatibility version.
+- A supplied MCP protocol-version header must be supported; invalid or unsupported values are rejected before dispatch, except on `initialize`, which negotiates the version in its body. When absent, the server uses its documented compatibility version.
 - **Scope:** exactly one logbook. Projects are addressed **by name only**, and the name must be in the server's own list of tracked projects. Paths, traversal and unknown names are rejected.
 - Existing names are preserved verbatim, including names longer than the CLI creation limit. Writes target exactly `projects/<name>.md`; names that cannot safely identify that direct child are rejected.
 - **Read results may include:** KPIs; and for each project its name, status, idle, last_tool, unlogged, Summary, Done, Next and log entries. These are owner-authored text, returned only to the authenticated owner.
@@ -241,5 +250,5 @@ A stdio MCP server started by an AI tool on the owner's machine, for one logbook
 
 ## 9. Versioning
 - `dashboard.json` carries `"schema": 1`. Readers should ignore unknown fields.
-- **v1.1** (2026-10-14) is additive: tracked-Path matching (§4.2), `waypoint add` (§1), logbook discovery and tool folders (§6), the Claude Code rules file and Codex `shadowed` state (§7), the `logbook` source (§4.1), writer tool ids (§2.3) and the local MCP contract (§8.2). Existing logbooks need no changes; `dashboard.json` stays schema 1.
+- **v1.1** (2026-10-14) is additive: tracked-Path matching (§4.2), `waypoint add` (§1), logbook discovery and tool folders (§6), the Claude Code rules file and Codex `shadowed` state (§7), the `logbook` source (§4.1), writer tool ids (§2.3), the local MCP contract (§8.2) and `chart.html` (§5.2). Existing logbooks need no changes; `dashboard.json` stays schema 1.
 - Grammar changes that break existing readers bump this spec's major version.

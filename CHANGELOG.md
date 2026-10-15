@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.1 — "Draw the chart"
+
+- **`chart.html`**: `waypoint fix` also writes the chart as one self-contained page you open from disk (`--open` opens it). No network requests; the data is embedded as inert JSON (spec §5.2, additive; schema stays 1).
+- **Faster local MCP server**: the chart is reused for up to 30 seconds and rebuilt as soon as a project file changes.
+- **`fix --push`** skips generated files you gitignore (for example a local-only `chart.html`).
+- **Global rule**: also names `chart.html` as generated. Run `waypoint rules --install` to update your tools; until then the chart reports the rule as drifted.
+
 ## 0.2.0 — "Leave harbour" (first public release)
 
 Logbook spec v1.1 (additive; existing logbooks keep working, `dashboard.json` stays schema 1).

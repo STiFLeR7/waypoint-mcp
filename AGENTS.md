@@ -4,14 +4,16 @@ This repo is the **engine**: spec, CLI, templates and tests. It must never conta
 
 ## Commands
 - Tests: `python -m unittest` (stdlib only; one test is POSIX-only). Run one test: `python -m unittest tests.test_waypoint.Chart.test_pulse_window_and_feed`.
+- Chart page in a real browser (local only, needs Playwright + Edge; CI runs no browser): `python scripts/chart_browser_check.py <shots dir> [chart.html ...]`.
 - CLI from source: `python -m waypoint fix --logbook <dir>`, or `pip install -e .` and then `waypoint …`.
 - Test against real data **without touching it**: copy a logbook to a temp folder and run `waypoint fix --logbook <copy>`.
+- End to end: `tests/test_end_to_end.py` runs one full story (setup, add, fix, MCP, archive, uninstall) on a temp machine. `python scripts/e2e_live.py [logbook]` does the same read-only checks on a copy of a real logbook (not run in CI).
 
 ## Architecture
 - `docs/LOGBOOK-SPEC.md` is the contract. Change the spec first, then the code, then the tests. Cite spec sections in code comments.
 - **Sources** (`waypoint/sources/`): one module per tool (`claude.py`, `codex.py`, `git.py`). Each returns `(sessions, health)` and **never raises on bad data**. Bad records count as `degraded`; a source that can't be read is `unreadable`.
 - `paths.py`: normalization and folder mapping (longest root wins). `logbook.py`: read-only parser with section scoping (Log is always last; first occurrence wins).
-- `chart.py`: builds `dashboard.json` (contract, schema 1) and `DASHBOARD.md` (presentation), written atomically. `rules.py`: renders `templates/GLOBAL-RULES.md`, checks drift against the render, and installs a managed block.
+- `chart.py`: builds `dashboard.json` (contract, schema 1), `DASHBOARD.md` and `chart.html` (presentation, from `templates/chart.html`), written atomically under one lock. `rules.py`: renders `templates/GLOBAL-RULES.md`, checks drift against the render, and installs a managed block.
 - `cli.py`: `init`, `fix [--push]`, `rules [--install]`.
 - `beacon/` (TypeScript, Cloudflare Worker): the remote MCP server for ChatGPT, behind GitHub OAuth with an allowlist. Tools `take_fix`, `read_chart`, `log_watch` (append-only, through the GitHub Contents API). Tests: `cd beacon && npm test && npm run typecheck`. Contract: spec §8; runbook: `beacon/README.md`.
 - Release scope in progress: `docs/release/R0-SCOPE.md`.

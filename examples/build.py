@@ -1,4 +1,4 @@
-"""Rebuild examples/logbook's chart (DASHBOARD.md, dashboard.json) from fixture sessions and a frozen clock.
+"""Rebuild examples/logbook's chart (DASHBOARD.md, dashboard.json, chart.html) from fixture sessions and a frozen clock.
 
     python examples/build.py           write the chart
     python examples/build.py --check   exit 1 if the committed chart differs (CI)
@@ -36,7 +36,7 @@ SESSIONS = [
 
 def build(base: Path):
     root, home, lb = base / "code", base / "home", base / "logbook"
-    shutil.copytree(HERE, lb, ignore=shutil.ignore_patterns("DASHBOARD.md", "dashboard.json"))
+    shutil.copytree(HERE, lb, ignore=shutil.ignore_patterns("DASHBOARD.md", "dashboard.json", "chart.html"))
     (lb / "projects" / "_archive").mkdir(exist_ok=True)
     for f in [lb / "waypoint.toml", *(lb / "projects").glob("*.md")]:
         f.write_text(f.read_text(encoding="utf-8").replace(PLACEHOLDER, str(root)), encoding="utf-8", newline="\n")
@@ -65,7 +65,7 @@ def build(base: Path):
     chart.write(lb, d)
     # the Markdown escapes characters such as "_" that a random temp folder name may contain
     return {name: (lb / name).read_text(encoding="utf-8").replace(chart._md(str(root)), PLACEHOLDER)
-            .replace(str(root), PLACEHOLDER) for name in ("DASHBOARD.md", "dashboard.json")}
+            .replace(str(root), PLACEHOLDER) for name in ("DASHBOARD.md", "dashboard.json", "chart.html")}
 
 
 def main(argv):
