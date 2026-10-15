@@ -1,0 +1,23 @@
+{
+  // Template. Copy to wrangler.local.jsonc (git-ignored), fill in your values, and deploy with:
+  //   npm run deploy        (runs: npx wrangler@4.151.0 deploy -c wrangler.local.jsonc)
+  "name": "waypoint-beacon",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-15",
+  // Must match BEACON_URL below.
+  "routes": [{ "pattern": "beacon.example.com", "custom_domain": true }],
+  "kv_namespaces": [
+    // Replace with the id printed by: npx wrangler@4.151.0 kv namespace create OAUTH_KV
+    { "binding": "OAUTH_KV", "id": "<your-kv-namespace-id>" }
+  ],
+  "vars": {
+    // The exact origin MCP clients connect to (no trailing slash). Tokens are bound to <BEACON_URL>/mcp.
+    "BEACON_URL": "https://beacon.example.com",
+    "LOGBOOK_REPO": "<github-user>/<logbook-repo>",
+    "LOGBOOK_BRANCH": "main",
+    // Who may sign in: comma-separated GitHub logins. Unset, empty or malformed lets nobody in.
+    "ALLOWED_GITHUB_USERS": "<github-user>"
+  }
+  // Secrets (never in this file): GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, GITHUB_TOKEN.
+  // Set each with: npx wrangler@4.151.0 secret put <NAME> -c wrangler.local.jsonc
+}

@@ -1,0 +1,6 @@
+# Waypoint logbook config. Every key is optional; defaults shown.
+roots = [{roots}]            # projects are top-level folders under these roots
+stale_days = { active = 21, occasional = 60 }
+untracked_days = 30
+pulse_days = 35
+feed_max = 60

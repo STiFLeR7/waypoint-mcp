@@ -1,0 +1,384 @@
+{
+ "schema": 1,
+ "generated": 1791979200.0,
+ "config": {
+  "stale_days": {
+   "active": 21,
+   "occasional": 60
+  },
+  "pulse_days": 35,
+  "untracked_days": 30
+ },
+ "sources": {
+  "claude-code": {
+   "state": "ok",
+   "detail": ""
+  },
+  "codex": {
+   "state": "ok",
+   "detail": "state_5.sqlite"
+  },
+  "git": {
+   "state": "ok",
+   "detail": ""
+  },
+  "logbook": {
+   "state": "ok",
+   "detail": ""
+  }
+ },
+ "rules": {
+  "logbook": "in-sync",
+  "claude-code": "in-sync",
+  "codex": "in-sync"
+ },
+ "kpi": {
+  "tracked": 3,
+  "attention": 1,
+  "velocity": 1,
+  "stale": 1,
+  "untracked": 1,
+  "unlogged": 1
+ },
+ "projects": [
+  {
+   "name": "aurora",
+   "file": "projects/aurora.md",
+   "path": "~/code/aurora",
+   "status": "active",
+   "summary": "A small weather dashboard: forecasts from an open API, rendered as a single page.",
+   "docs": [
+    "README.md",
+    "docs/PLAN.md"
+   ],
+   "done": "Hourly forecast chart, with unit switching.",
+   "next": "Offline cache for the last forecast.",
+   "attention": [
+    "The forecast API key expires on 2026-10-31; rotate it."
+   ],
+   "last": 1791892800.0,
+   "last_tool": "claude-code",
+   "idle": 1,
+   "claude": 1791892800.0,
+   "codex": 1791633600.0,
+   "git": 0,
+   "stale": false,
+   "unlogged": 1,
+   "logs": [
+    {
+     "ts": 1791590400.0,
+     "date": "2026-10-10",
+     "tool": "codex",
+     "text": "Added unit switching (metric/imperial) to the hourly chart; see docs/PLAN.md."
+    },
+    {
+     "ts": 1791244800.0,
+     "date": "2026-10-06",
+     "tool": "claude-code",
+     "text": "Built the hourly forecast chart from the API response."
+    }
+   ]
+  },
+  {
+   "name": "tidewater",
+   "file": "projects/tidewater.md",
+   "path": "~/code/tidewater",
+   "status": "occasional",
+   "summary": "Tide-table scraper for three harbours, published as a calendar feed.",
+   "docs": [
+    "README.md"
+   ],
+   "done": "Calendar feed for all three harbours.",
+   "next": "Handle the daylight-saving change in the feed.",
+   "attention": [],
+   "last": 1785542400.0,
+   "last_tool": "chatgpt",
+   "idle": 74,
+   "claude": 0,
+   "codex": 0,
+   "git": 0,
+   "stale": true,
+   "unlogged": 0,
+   "logs": [
+    {
+     "ts": 1785542400.0,
+     "date": "2026-08-01",
+     "tool": "chatgpt",
+     "text": "Drafted the daylight-saving fix: shift times by the harbour's UTC offset per date."
+    },
+    {
+     "ts": 1785196800.0,
+     "date": "2026-07-28",
+     "tool": "claude-code",
+     "text": "Published the calendar feed for all three harbours."
+    }
+   ]
+  },
+  {
+   "name": "lighthouse",
+   "file": "projects/lighthouse.md",
+   "path": "~/code/lighthouse",
+   "status": "done",
+   "summary": "A command-line pomodoro timer. Finished and released.",
+   "docs": [
+    "README.md",
+    "CHANGELOG.md"
+   ],
+   "done": "v1.0 released.",
+   "next": "Nothing planned.",
+   "attention": [],
+   "last": 1789905600.0,
+   "last_tool": "claude-code",
+   "idle": 24,
+   "claude": 1789905600.0,
+   "codex": 0,
+   "git": 0,
+   "stale": false,
+   "unlogged": 0,
+   "logs": [
+    {
+     "ts": 1789862400.0,
+     "date": "2026-09-20",
+     "tool": "claude-code",
+     "text": "Released v1.0; see CHANGELOG.md."
+    }
+   ]
+  }
+ ],
+ "archived": [],
+ "untracked": [
+  {
+   "path": "~/code/scratch",
+   "last": 1791806400.0,
+   "title": "Try a CSV export"
+  }
+ ],
+ "pulse": {
+  "2026-09-10": {
+   "claude-code": 0,
+   "codex": 0,
+   "chatgpt": 0
+  },
+  "2026-09-11": {
+   "claude-code": 0,
+   "codex": 0,
+   "chatgpt": 0
+  },
+  "2026-09-12": {
+   "claude-code": 0,
+   "codex": 0,
+   "chatgpt": 0
+  },
+  "2026-09-13": {
+   "claude-code": 0,
+   "codex": 0,
+   "chatgpt": 0
+  },
+  "2026-09-14": {
+   "claude-code": 0,
+   "codex": 0,
+   "chatgpt": 0
+  },
+  "2026-09-15": {
+   "claude-code": 0,
+   "codex": 0,
+   "chatgpt": 0
+  },
+  "2026-09-16": {
+   "claude-code": 0,
+   "codex": 0,
+   "chatgpt": 0
+  },
+  "2026-09-17": {
+   "claude-code": 0,
+   "codex": 0,
+   "chatgpt": 0
+  },
+  "2026-09-18": {
+   "claude-code": 0,
+   "codex": 0,
+   "chatgpt": 0
+  },
+  "2026-09-19": {
+   "claude-code": 0,
+   "codex": 0,
+   "chatgpt": 0
+  },
+  "2026-09-20": {
+   "claude-code": 2,
+   "codex": 0,
+   "chatgpt": 0
+  },
+  "2026-09-21": {
+   "claude-code": 0,
+   "codex": 0,
+   "chatgpt": 0
+  },
+  "2026-09-22": {
+   "claude-code": 0,
+   "codex": 0,
+   "chatgpt": 0
+  },
+  "2026-09-23": {
+   "claude-code": 0,
+   "codex": 0,
+   "chatgpt": 0
+  },
+  "2026-09-24": {
+   "claude-code": 0,
+   "codex": 0,
+   "chatgpt": 0
+  },
+  "2026-09-25": {
+   "claude-code": 0,
+   "codex": 0,
+   "chatgpt": 0
+  },
+  "2026-09-26": {
+   "claude-code": 0,
+   "codex": 0,
+   "chatgpt": 0
+  },
+  "2026-09-27": {
+   "claude-code": 0,
+   "codex": 0,
+   "chatgpt": 0
+  },
+  "2026-09-28": {
+   "claude-code": 0,
+   "codex": 0,
+   "chatgpt": 0
+  },
+  "2026-09-29": {
+   "claude-code": 0,
+   "codex": 0,
+   "chatgpt": 0
+  },
+  "2026-09-30": {
+   "claude-code": 0,
+   "codex": 0,
+   "chatgpt": 0
+  },
+  "2026-10-01": {
+   "claude-code": 0,
+   "codex": 0,
+   "chatgpt": 0
+  },
+  "2026-10-02": {
+   "claude-code": 0,
+   "codex": 0,
+   "chatgpt": 0
+  },
+  "2026-10-03": {
+   "claude-code": 0,
+   "codex": 0,
+   "chatgpt": 0
+  },
+  "2026-10-04": {
+   "claude-code": 0,
+   "codex": 0,
+   "chatgpt": 0
+  },
+  "2026-10-05": {
+   "claude-code": 0,
+   "codex": 0,
+   "chatgpt": 0
+  },
+  "2026-10-06": {
+   "claude-code": 1,
+   "codex": 0,
+   "chatgpt": 0
+  },
+  "2026-10-07": {
+   "claude-code": 0,
+   "codex": 0,
+   "chatgpt": 0
+  },
+  "2026-10-08": {
+   "claude-code": 0,
+   "codex": 0,
+   "chatgpt": 0
+  },
+  "2026-10-09": {
+   "claude-code": 0,
+   "codex": 0,
+   "chatgpt": 0
+  },
+  "2026-10-10": {
+   "claude-code": 0,
+   "codex": 2,
+   "chatgpt": 0
+  },
+  "2026-10-11": {
+   "claude-code": 0,
+   "codex": 0,
+   "chatgpt": 0
+  },
+  "2026-10-12": {
+   "claude-code": 0,
+   "codex": 1,
+   "chatgpt": 0
+  },
+  "2026-10-13": {
+   "claude-code": 1,
+   "codex": 0,
+   "chatgpt": 0
+  },
+  "2026-10-14": {
+   "claude-code": 0,
+   "codex": 0,
+   "chatgpt": 0
+  }
+ },
+ "feed": [
+  {
+   "ts": 1791892800.0,
+   "tool": "claude-code",
+   "kind": "session",
+   "project": "aurora",
+   "text": "Offline cache for the last forecast"
+  },
+  {
+   "ts": 1791806400.0,
+   "tool": "codex",
+   "kind": "session",
+   "project": "~/code/scratch",
+   "text": "Try a CSV export"
+  },
+  {
+   "ts": 1791633600.0,
+   "tool": "codex",
+   "kind": "session",
+   "project": "aurora",
+   "text": "Unit switching for the hourly chart"
+  },
+  {
+   "ts": 1791590400.0,
+   "tool": "codex",
+   "kind": "log",
+   "project": "aurora",
+   "text": "Added unit switching (metric/imperial) to the hourly chart; see docs/PLAN.md."
+  },
+  {
+   "ts": 1791244800.0,
+   "tool": "claude-code",
+   "kind": "log",
+   "project": "aurora",
+   "text": "Built the hourly forecast chart from the API response."
+  },
+  {
+   "ts": 1789905600.0,
+   "tool": "claude-code",
+   "kind": "session",
+   "project": "lighthouse",
+   "text": "Release v1.0"
+  },
+  {
+   "ts": 1789862400.0,
+   "tool": "claude-code",
+   "kind": "log",
+   "project": "lighthouse",
+   "text": "Released v1.0; see CHANGELOG.md."
+  }
+ ]
+}

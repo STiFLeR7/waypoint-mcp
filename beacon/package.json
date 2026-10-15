@@ -1,0 +1,18 @@
+{
+  "name": "waypoint-beacon",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test \"test/*.test.ts\"",
+    "typecheck": "tsc --noEmit",
+    "dev": "npx wrangler@4.151.0 dev -c wrangler.local.jsonc",
+    "deploy": "npx wrangler@4.151.0 deploy -c wrangler.local.jsonc"
+  },
+  "dependencies": {
+    "@cloudflare/workers-oauth-provider": "1.2.3"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2"
+  }
+}

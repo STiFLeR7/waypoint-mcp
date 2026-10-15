@@ -1,0 +1,1 @@
+# Folders that are never projects: one absolute path per line. Lines starting with # are comments.
