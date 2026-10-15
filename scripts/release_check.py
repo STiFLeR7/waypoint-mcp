@@ -2,7 +2,8 @@
 
     python scripts/release_check.py dist [DIR]   check the wheel and sdist in DIR (default: build them in a temp folder)
     python scripts/release_check.py tree [DIR]   scan the public view of DIR's git-tracked files (default: this repo)
-    python scripts/release_check.py export DEST  write the public tree to DEST as a fresh repo (scanned; not pushed)
+    python scripts/release_check.py export DEST  write the public tree to DEST (scanned; never pushed): a new folder
+                                                 becomes a fresh repo; a clean clone of the public repo gets one commit
 
 Owner-specific strings (a domain, a KV id, a username) are never committed: list them one per line (regular
 expressions) in `.private-patterns` (git-ignored) or the PRIVATE_PATTERNS environment variable (a CI secret).
@@ -97,9 +98,14 @@ def check_tree(root: Path):
 
 
 def export(dest: Path):
-    """The public tree: HEAD's tracked files minus PRIVATE_ONLY, as a fresh one-commit repo. Never pushes."""
-    if dest.exists():
-        sys.exit(f"{dest} already exists; choose a new folder")
+    """The public tree: HEAD's tracked files minus PRIVATE_ONLY. A new DEST becomes a fresh one-commit repo; an
+    existing clean clone of the public repo gets one new commit on top of its history. Never pushes."""
+    git = lambda *a: subprocess.run(["git", "-C", str(dest), *a], check=True, capture_output=True, text=True)
+    update = dest.exists()
+    if update:
+        if not (dest / ".git").exists() or git("status", "--porcelain").stdout.strip():
+            sys.exit(f"{dest} exists but isn't a clean clone of the public repo; use a clean clone or a new folder")
+        git("rm", "-rq", "--ignore-unmatch", ".")  # the public tree becomes exactly this export, deletions included
     names = subprocess.run(["git", "-C", str(REPO), "ls-tree", "-r", "-z", "--name-only", "HEAD"], check=True,
                            capture_output=True).stdout.decode("utf-8").split("\0")
     kept = [n for n in names if n and not n.startswith(PRIVATE_ONLY)]
@@ -107,20 +113,25 @@ def export(dest: Path):
         data = subprocess.run(["git", "-C", str(REPO), "show", f"HEAD:{n}"], check=True, capture_output=True).stdout
         (dest / n).parent.mkdir(parents=True, exist_ok=True)
         (dest / n).write_bytes(data)
-    git = lambda *a: subprocess.run(["git", "-C", str(dest), *a], check=True, capture_output=True, text=True)
-    git("init", "-q", "-b", "main")
+    if not update:
+        git("init", "-q", "-b", "main")
     git("add", "-A")
+    if update and not git("status", "--porcelain").stdout.strip():
+        print(f"{dest} already matches the export; nothing to commit.")
+        return [], patterns()[1]
+    version = re.search(r'^version = "([^"]+)"', (dest / "pyproject.toml").read_text(encoding="utf-8"), re.M)[1]
+    message = f"Waypoint {version}" + ("" if update else ": first public release")
     me = lambda k: subprocess.run(["git", "-C", str(REPO), "config", k], capture_output=True, text=True).stdout.strip()
     who = f"{me('user.name')} <{me('user.email')}>"  # the engine repo's identity becomes the public commit's author
     problems, n = check_tree(dest)
     problems += scan("commit identity", who.encode(), patterns()[0])
     if not problems:
         git("-c", f"user.name={me('user.name')}", "-c", f"user.email={me('user.email')}",
-            "commit", "-q", "-m", "Waypoint 0.2.0: first public release")
+            "commit", "-q", "-m", message)
         meta = git("log", "-1", "--format=%an <%ae>%n%cn <%ce>%n%B").stdout
         problems += scan("commit metadata", meta.encode(), patterns()[0])
     if not problems:
-        print(f"Exported {len(kept)} files to {dest} as {who} (left out: {', '.join(PRIVATE_ONLY)}). Nothing was pushed.")
+        print(f"{'Updated' if update else 'Exported'} {len(kept)} files in {dest} as {who} (left out: {', '.join(PRIVATE_ONLY)}). Nothing was pushed.")
     return problems, n
 
 
