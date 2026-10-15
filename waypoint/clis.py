@@ -8,13 +8,18 @@ import os
 import re
 import shutil
 import sys
+import sysconfig
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
 from .sources import tool_dir
+from .paths import real
 
 SERVER = {"command": "waypoint", "args": ["mcp"]}
+NAMES = ("waypoint", "waypoint-local")  # waypoint-local: when `waypoint` is already someone else's server
+NO_COMMAND = ("`waypoint` isn't on PATH and this installation's script wasn't found. Reinstall Waypoint "
+              "(pip install waypoint-mcp) and try again")
 
 
 @dataclass(frozen=True)
@@ -24,8 +29,6 @@ class Cli:
     tier: str  # supported | preview | snippet
     exe: str | None = None
     rule: str | None = None  # managed-block file in the config dir (Claude Code has its own file; see rules.py)
-    add: tuple = ()  # argv after the executable that registers SERVER
-    remove: tuple = ()
     snippet: tuple = ()  # (config path under home, text) for snippet CLIs
 
 
@@ -44,14 +47,10 @@ def _desktop_config():
 _STD = {"mcpServers": {"waypoint": SERVER}}
 
 CLIS = {c.id: c for c in (
-    Cli("claude-code", "Claude Code", "supported", "claude", None,
-        ("mcp", "add", "--scope", "user", "waypoint", "--", "waypoint", "mcp"), ("mcp", "remove", "--scope", "user", "waypoint")),
-    Cli("codex", "Codex", "supported", "codex", "AGENTS.md",
-        ("mcp", "add", "waypoint", "--", "waypoint", "mcp"), ("mcp", "remove", "waypoint")),
-    Cli("gemini-cli", "Gemini CLI", "preview", "gemini", "GEMINI.md",
-        ("mcp", "add", "--scope", "user", "waypoint", "waypoint", "mcp"), ("mcp", "remove", "--scope", "user", "waypoint")),
-    Cli("copilot-cli", "GitHub Copilot CLI", "preview", "copilot", "copilot-instructions.md",
-        ("mcp", "add", "waypoint", "--", "waypoint", "mcp"), ("mcp", "remove", "waypoint")),
+    Cli("claude-code", "Claude Code", "supported", "claude"),
+    Cli("codex", "Codex", "supported", "codex", "AGENTS.md"),
+    Cli("gemini-cli", "Gemini CLI", "preview", "gemini", "GEMINI.md"),
+    Cli("copilot-cli", "GitHub Copilot CLI", "preview", "copilot", "copilot-instructions.md"),
     Cli("cursor", "Cursor", "snippet", snippet=("~/.cursor/mcp.json", _json({"mcpServers": {"waypoint": {"type": "stdio", **SERVER}}}))),
     Cli("windsurf", "Windsurf", "snippet", snippet=("~/.codeium/windsurf/mcp_config.json", _json(_STD))),
     Cli("kiro", "Kiro", "snippet", snippet=("~/.kiro/settings/mcp.json", _json(_STD))),
@@ -88,8 +87,21 @@ def mcp_file(cli_id, home: Path) -> Path:
     return config_dir(cli_id, home) / name
 
 
-def mcp_entry(f: Path):
-    """The registered `waypoint` server in f: (entry dict or None, error or None)."""
+def mcp_argv(cli_id, op, name="waypoint", command="waypoint", project=False):
+    """argv after the executable that adds or removes the server `name` running `<command> mcp`. project: the CLI's
+    per-repo scope (run it with the repo as working directory); only Claude Code (local) and Gemini CLI (project)."""
+    scope = {"claude-code": ("--scope", "local" if project else "user"),
+             "gemini-cli": ("--scope", "project" if project else "user")}.get(cli_id, ())
+    if project and not scope:
+        raise ValueError(f"{CLIS[cli_id].name} has no per-project `mcp add`")
+    if op == "remove":
+        return ("mcp", "remove", *scope, name)
+    return ("mcp", "add", *scope, name, *(() if cli_id == "gemini-cli" else ("--",)), command, "mcp")
+
+
+def mcp_entry(f: Path, name="waypoint", project: Path | None = None):
+    """The registered server `name` in f: (entry dict or None, error or None). project: Claude Code's local scope,
+    which ~/.claude.json keeps under projects[<repo path>] (code.claude.com/docs/en/mcp, "Local scope")."""
     try:
         text = f.read_text(encoding="utf-8")
     except FileNotFoundError:
@@ -100,14 +112,66 @@ def mcp_entry(f: Path):
         data = tomllib.loads(text) if f.suffix == ".toml" else (_loads_json(text) if text.strip() else {})
     except (ValueError, tomllib.TOMLDecodeError) as e:
         return None, f"can't parse it ({type(e).__name__})"
+    if project is not None:
+        projects = data.get("projects") if isinstance(data, dict) else None
+        key = real(str(project))
+        data = next((v for k, v in projects.items() if real(k) == key), {}) if isinstance(projects, dict) else {}
     servers = data.get("mcp_servers" if f.suffix == ".toml" else "mcpServers") if isinstance(data, dict) else None
-    entry = servers.get("waypoint") if isinstance(servers, dict) else None
+    entry = servers.get(name) if isinstance(servers, dict) else None
     return (entry if isinstance(entry, dict) or entry is None else {"value": entry}), None
+
+
+def mcp_entries(f: Path, project: Path | None = None):
+    """{name: entry or None} for both NAMES (one mcp_entry call each), or (None, error)."""
+    out = {}
+    for n in NAMES:
+        entry, err = mcp_entry(f, n, project)
+        if err:
+            return None, err
+        out[n] = entry
+    return out, None
+
+
+def entries_of(servers):
+    """{name: entry or None} for NAMES from a parsed servers table; a non-table value counts as someone else's."""
+    servers = servers if isinstance(servers, dict) else {}
+    return {n: (e if isinstance(e, dict) or e is None else {"value": e}) for n in NAMES for e in [servers.get(n)]}
+
+
+def choose(entries):
+    """(ours, free): the name already holding Waypoint's own server, and the first name nobody uses."""
+    ours = next((n for n in NAMES if entries.get(n) is not None and is_ours(entries[n])), None)
+    free = next((n for n in NAMES if entries.get(n) is None), None)
+    return ours, free
+
+
+def installed_commands():
+    """Absolute paths of this installation's `waypoint` script: the running Python's scripts folder and the per-user
+    one. Used when `waypoint` isn't on PATH, so the registration still starts this Waypoint."""
+    exe = "waypoint.exe" if os.name == "nt" else "waypoint"
+    found = []
+    for scheme in (None, f"{os.name}_user"):
+        try:
+            d = sysconfig.get_path("scripts", scheme) if scheme else sysconfig.get_path("scripts")
+        except KeyError:
+            continue
+        if d and (Path(d) / exe).is_file() and str(Path(d) / exe) not in found:
+            found.append(str(Path(d) / exe))
+    return found
+
+
+def server_command():
+    """What to register: `waypoint` when it's on PATH (the tool resolves it at launch), else this installation's
+    absolute script, else None. ponytail: our PATH stands in for the tool's; status flags an entry that doesn't resolve."""
+    if shutil.which("waypoint"):
+        return "waypoint"
+    found = installed_commands()
+    return found[0] if found else None
 
 
 def is_ours(entry):
     """A local stdio registration of exactly `waypoint mcp` (or `waypoint-mcp`), as Waypoint registers it: the bare
-    command, or an absolute path to the `waypoint` on PATH. Remote entries and look-alikes are not ours."""
+    command, or an absolute path to the `waypoint` on PATH or to this installation's script. Remote entries and look-alikes are not ours."""
     cmd, args = entry.get("command"), entry.get("args") or []
     if not isinstance(cmd, str) or "url" in entry or entry.get("type") not in (None, "stdio", "local"):
         return False
@@ -121,8 +185,10 @@ def is_ours(entry):
         return False
     if Path(cmd).name == cmd:  # bare: resolved on PATH at launch, exactly as Waypoint registers it
         return cmd in ("waypoint", "waypoint-mcp")
+    target = os.path.normcase(os.path.realpath(cmd))
     found = shutil.which(Path(cmd).stem)
-    return bool(found) and os.path.normcase(os.path.realpath(found)) == os.path.normcase(os.path.realpath(cmd))
+    candidates = ([found] if found else []) + (installed_commands() if Path(cmd).stem.lower() == "waypoint" else [])
+    return any(os.path.normcase(os.path.realpath(c)) == target for c in candidates)
 
 
 _JSON_COMMENTS = re.compile(r'"(?:\\.|[^"\\])*"|//[^\n]*|/\*.*?\*/', re.S)

@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.3.0 — "Fitting out"
+
+- Screen: Backspace goes back (as ←), except while typing a search.
+- Manager screen: Enter on a project or AI tool opens its actions (the letter keys stay as shortcuts); a single-choice list's dot follows the cursor.
+- Setup screen: with no remembered logbook, the logbook your installed Claude Code rule already uses is offered first ("In use by your AI tools"), so a re-run no longer defaults to a new, empty one.
+- The global rule names both MCP server names (`waypoint`, or `waypoint-local` where that name was taken).
+- `disconnect --project`: a removal that is refused keeps its paths in the repo's git exclude; Copilot's `.github/mcp.json` counts as Waypoint's only when this repo's own line is in the exclude (not a sibling subproject's); an unreadable exclude file is named in the refusal.
+- **The screen** (optional extra `waypoint-mcp[tui]`: Rich + prompt_toolkit): `waypoint setup` is a guided wizard (logbook, roots, projects, AI tools, global or per project, Review, Apply) and `waypoint` alone opens a manager for projects, AI tools and status. Nothing is written before Apply. Without the extra, numbered prompts as before.
+- `setup --yes` includes the Codex `writable_roots` change unless `--no-writable-root` is supplied.
+- **Beacon:** `log_watch` takes the caller's tool id (default chatgpt), so Codex and Claude Code entries are no longer labelled ChatGPT.
+- **`waypoint refresh`**: the plain name for `fix` (`fix` still works).
+- **`archive`, `restore`, `remove`, `ignore`**: manage which projects are tracked without editing files by hand.
+- **`waypoint status`** (and an MCP `status` tool): the whole install at a glance, with a fix for each problem.
+- README leads with what Waypoint does, says which tools give automatic history, and explains what each signal means.
+- **Record freshness** (logbook spec v1.2, additive): an optional `- Updated:` line in `## Now`. When the newest log entry is later, the project shows **Now behind log** in DASHBOARD.md, `chart.html` (filterable), `status` and the MCP tools. `dashboard.json` gains `updated`, `now_behind` and `kpi.behind` (schema stays 1).
+- **`log_watch` `done`/`next`** (local server and beacon): set Done and Next, and Updated, in the same locked write as the log entry.
+- **Global rule**: `waypoint refresh`, pass `done`/`next` to `log_watch`, set `Updated` when editing Now by hand. Run `waypoint rules --install`; until then the chart reports the rule as drifted.
+- Fixes: a live project whose Status line says `archived` stays live; `remove --ignore` says what happened if the ignore write fails after the delete.
+- **Per-project install**: `waypoint connect <cli> --project <repo>` and `waypoint disconnect`, with the rule as an import, a link or a copy, the MCP entry scoped to the repo, and a local git exclude.
+- **MCP name clash**: Waypoint registers as `waypoint-local` when `waypoint` is already another server (it used to refuse), and registers its full path when `waypoint` isn't on PATH.
+- **Codex sandbox**: adding the logbook to `writable_roots` is now a reviewed change instead of printed advice.
+- **`waypoint status`**: each tool's rule method and per-project installs, plus problems for a rule loaded twice, a broken link and an untrusted Codex folder.
+
 ## 0.2.1 — "Draw the chart"
 
 - **`chart.html`**: `waypoint fix` also writes the chart as one self-contained page you open from disk (`--open` opens it). No network requests; the data is embedded as inert JSON (spec §5.2, additive; schema stays 1).

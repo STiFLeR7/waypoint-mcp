@@ -18,7 +18,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
-      - run: python -W error -m unittest -v
+      - run: python -W error -m unittest -v  # without the tui extra: its screen tests skip, the rest must pass
       - name: Installed wheel, run from outside the checkout
         shell: bash
         run: |
@@ -26,6 +26,21 @@ jobs:
           python -m build --wheel --outdir "$RUNNER_TEMP/dist"
           python -m pip install "$RUNNER_TEMP"/dist/*.whl
           cd "$RUNNER_TEMP" && python "$GITHUB_WORKSPACE/scripts/smoke_installed.py"
+
+  tui:  # the same suite with the screen's extra installed: the TUI tests run instead of skipping
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ["3.11", "3.13"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install -e ".[tui]"
+      - run: python -W error -m unittest -v
 
   example:
     runs-on: ubuntu-latest

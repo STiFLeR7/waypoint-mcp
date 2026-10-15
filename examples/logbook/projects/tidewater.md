@@ -7,6 +7,7 @@
 ## Now
 - Done: Calendar feed for all three harbours.
 - Next: Handle the daylight-saving change in the feed.
+- Updated: 2026-07-28
 
 ## Log
 ### 2026-08-01 — chatgpt

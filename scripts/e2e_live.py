@@ -21,10 +21,11 @@ sys.path.insert(0, str(REPO))
 from waypoint import config  # noqa: E402
 
 TOP = {"schema", "generated", "config", "sources", "rules", "kpi", "projects", "archived", "untracked", "pulse", "feed"}
-KPI = {"tracked", "attention", "velocity", "stale", "untracked", "unlogged"}
-PROJECT = {"name", "file", "path", "status", "summary", "docs", "done", "next", "attention", "last", "last_tool",
-           "idle", "claude", "codex", "git", "stale", "unlogged", "logs"}
-MCP_PROJECT = {"name", "status", "idle", "last_tool", "unlogged", "summary", "next", "done", "attention"}
+KPI = {"tracked", "attention", "velocity", "stale", "untracked", "unlogged", "behind"}
+PROJECT = {"name", "file", "path", "status", "summary", "docs", "done", "next", "updated", "attention", "last",
+           "last_tool", "idle", "claude", "codex", "git", "stale", "unlogged", "now_behind", "logs"}
+MCP_PROJECT = {"name", "status", "idle", "last_tool", "unlogged", "now_behind", "updated", "summary", "next", "done",
+               "attention"}
 failures, warnings = [], []
 
 
@@ -56,6 +57,7 @@ def check_chart(d):
     check(k["tracked"] == len(live), "kpi.tracked == len(projects)")
     check(k["untracked"] == len(d["untracked"]), "kpi.untracked == len(untracked)")
     check(k["unlogged"] == sum(1 for p in live if p["unlogged"]), "kpi.unlogged == projects with unlogged > 0")
+    check(k["behind"] == sum(1 for p in live if p["now_behind"]), "kpi.behind == projects with now_behind")
     check(k["attention"] == sum(len(p["attention"]) for p in live), "kpi.attention == Attention lines")
     check(k["stale"] == sum(p["stale"] for p in live), "kpi.stale == stale projects")
     week = d["generated"] - 7 * 86400

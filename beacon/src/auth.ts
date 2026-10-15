@@ -53,7 +53,7 @@ function consentPage(d: ConsentDescription, handle: string, headers: Headers) {
   return page(
     200,
     "Raise the beacon?",
-    `<p>Allow <strong>${escape(d.clientName)}</strong> to read your Waypoint chart (dashboard) and add <code>chatgpt</code> log entries to your projects?</p>
+    `<p>Allow <strong>${escape(d.clientName)}</strong> to read your Waypoint chart (dashboard) and add log entries to your projects (with the app's own tool id)?</p>
 <p>${origin} Access will be sent to <strong>${escape(d.redirectHost)}</strong>.</p>
 ${d.redirectIsLoopback ? '<p class="warn"><strong>This sends access to an app on your computer.</strong> Continue only if you just started connecting from it.</p>' : ""}
 <p>Next you sign in with GitHub. Only the logbook owner is let through.</p>

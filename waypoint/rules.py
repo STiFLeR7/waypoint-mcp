@@ -5,22 +5,25 @@ Codex has no rules folder, so `<codex>/AGENTS.md` gets a managed block between m
 (shown to the user), skipped when nothing changes, refused on malformed markers, backed up and replaced atomically.
 """
 import difflib
+import functools
 import json
 import os
 import re
 import shutil
 import subprocess
 import tempfile
+import tomllib
 from dataclasses import dataclass
 from datetime import datetime
 from importlib import resources
 from pathlib import Path
 
 from . import clis
-from .paths import norm
+from .paths import norm, real
 
 BEGIN, END = "<!-- waypoint:rules:begin -->", "<!-- waypoint:rules:end -->"
 OWNED = "<!-- waypoint: managed file. `waypoint rules --uninstall` removes it. -->"
+MCP_MARKS = ("# waypoint:mcp:begin", "# waypoint:mcp:end")
 
 
 def template():
@@ -59,6 +62,19 @@ def claude_file_text(logbook: Path):
     return f"{OWNED}\n{claude_import(logbook)}\n"
 
 
+def global_rule_file(cli_id, home):
+    """The file holding a CLI's global rule."""
+    return claude_rule_file(home) if cli_id == "claude-code" else clis.config_dir(cli_id, home) / clis.CLIS[cli_id].rule
+
+
+def global_method(cli_id: str, home: Path) -> str:
+    """How the global rule is installed: import (Claude Code's file, or an older CLAUDE.md block) | copy | none."""
+    if cli_id == "claude-code":
+        own, legacy = (_read(claude_rule_file(home))[0] or ""), (_read(claude_dir(home) / "CLAUDE.md")[0] or "")
+        return "import" if OWNED in own or BEGIN in legacy else "none"
+    return "copy" if BEGIN in (_read(global_rule_file(cli_id, home))[0] or "") else "none"
+
+
 def _read(f: Path):
     """(text, error). Text keeps its line endings; a file that isn't UTF-8 is never rewritten."""
     try:
@@ -84,8 +100,7 @@ def check(home: Path, logbook: Path, tools=None):
     in-sync | drifted | missing, and for Codex also shadowed (an AGENTS.override.md that Codex reads instead)."""
     canonical = _clean(render(logbook))
     canonical_file = logbook / "GLOBAL-RULES.md"
-    on_disk, _ = _read(canonical_file)
-    out = {"logbook": "missing" if on_disk is None else ("in-sync" if _clean(on_disk) == canonical else "drifted")}
+    out = {"logbook": logbook_state(logbook)}
     target = norm(str(canonical_file.resolve()))
 
     rf_text, _ = _read(claude_rule_file(home))
@@ -114,6 +129,12 @@ def check(home: Path, logbook: Path, tools=None):
     return out
 
 
+def logbook_state(logbook: Path):
+    """in-sync | drifted | missing for <logbook>/GLOBAL-RULES.md against this version's rendered rule (§7)."""
+    on_disk, _ = _read(logbook / "GLOBAL-RULES.md")
+    return "missing" if on_disk is None else ("in-sync" if _clean(on_disk) == _clean(render(logbook)) else "drifted")
+
+
 # ---- planning and applying changes ----
 
 @dataclass
@@ -123,68 +144,93 @@ class Change:
     old: str | None = None
     new: str | None = None
     note: str = ""
-    after: "Change | None" = None  # apply this only if that change succeeded (or was already in place)
+    after: "Change | tuple[Change, ...] | None" = None  # apply only after each dependency succeeded
     run: tuple = ()  # register/unregister: the CLI's own command (target is the file it keeps registrations in)
+    cwd: Path | None = None
+    keyed: bool = False
+    replace_link: bool = False
+    link_target: str | None = None
+    remove_text: str | None = None
+    run_more: tuple = ()
 
     def diff(self):
+        if self.action == "link":
+            if self.new is None:
+                return f"  removes the link {self.target} (it pointed to {self.old}); the file it points to is kept"
+            return f"  links {self.target} → {self.new}" + (f" (was → {self.old})" if self.old else "")
         if self.run:
             return "  runs: " + " ".join(self.run)
+        if self.target.name == "config.toml" and any(m in (self.new or "") or m in (self.old or "")
+                                                        for marks in (MCP_MARKS, SANDBOX) for m in marks):
+            def marked(text):
+                out = []
+                for begin, end in (MCP_MARKS, SANDBOX):
+                    if text and begin in text and end in text:
+                        out.extend(line + "\n" for line in text[text.index(begin):text.index(end) + len(end)].splitlines())
+                return out
+            return "".join(difflib.unified_diff(marked(self.old), marked(self.new),
+                                                str(self.target), str(self.target), n=1))
         a = (self.old or "").splitlines(keepends=True)
         b = (self.new or "").splitlines(keepends=True)
         return "".join(difflib.unified_diff(a, b, str(self.target), str(self.target), n=1))
 
 
-def edit_block(old, block):
+def edit_block(old, block, begin=BEGIN, end=END):
     """New text with the managed block set to `block` (None removes it); ValueError for malformed markers.
     Bytes outside the block are kept; the block uses the file's own line endings."""
     old = old or ""
-    b, e = old.count(BEGIN), old.count(END)
-    if (b, e) not in ((0, 0), (1, 1)) or (b == 1 and old.index(BEGIN) > old.index(END)):
+    b, e = old.count(begin), old.count(end)
+    if (b, e) not in ((0, 0), (1, 1)) or (b == 1 and old.index(begin) > old.index(end)):
         raise ValueError(f"its Waypoint markers are malformed ({b} begin, {e} end); fix them by hand first")
     eol = "\r\n" if "\r\n" in old else "\n"
     if block is None:
         if b == 0:
             return old
-        i, j = old.index(BEGIN), old.index(END) + len(END)
+        i, j = old.index(begin), old.index(end) + len(end)
         if old.startswith(eol, j):
             j += len(eol)  # the END line's own line ending
         if j == len(old) and old[:i].endswith(eol * 2):
             i -= len(eol)  # block at the end of the file: the blank line install put before it
         return old[:i] + old[j:]
-    wrapped = BEGIN + eol + eol.join(block.strip().splitlines()) + eol + END
+    wrapped = begin + eol + eol.join(block.strip().splitlines()) + eol + end
     if b == 1:
-        i, j = old.index(BEGIN), old.index(END) + len(END)
+        i, j = old.index(begin), old.index(end) + len(end)
         return old[:i] + wrapped + old[j:]
     if not old:
         return wrapped + eol
     return old + (eol if old.endswith(("\n", "\r")) else eol * 2) + wrapped + eol
 
 
-def _block_change(f: Path, block, note):
+def _block_change(f: Path, block, note, begin=BEGIN, end=END, drop_empty=False):
     old, err = _read(f)
     if err:
         return Change(f, "refuse", note=err)
     if old is None and block is None:
         return Change(f, "unchanged", note=note)
     try:
-        new = edit_block(old, block)
+        new = edit_block(old, block, begin, end)
     except ValueError as e:
         return Change(f, "refuse", old, note=str(e))
     if new == (old or ""):
         return Change(f, "unchanged", old, new, note)
-    return Change(f, "create" if old is None else ("remove" if block is None else "update"), old, new, note)
+    if drop_empty and block is None and not new.strip():
+        return Change(f, "remove", old, None, note, remove_text=new)
+    return Change(f, "create" if old is None else ("remove" if block is None else "update"), old, new, note,
+                  remove_text=new if block is None else None)
 
 
 TOOLS = ("claude-code", "codex")
-WRITES = ("create", "update", "remove", "register", "unregister")
+WRITES = ("create", "update", "remove", "link", "register", "unregister")
 
 
-def plan_install(home: Path, logbook: Path, codex_override=False, tools=TOOLS, mcp=False):
+def plan_install(home: Path, logbook: Path, codex_override=False, tools=TOOLS, mcp=False, writable_root=False):
     changes = []
     if "claude-code" in tools:
         changes += _plan_claude(home, logbook)
     if "codex" in tools:
         changes += _plan_codex(home, logbook, codex_override)
+        if writable_root:
+            changes.append(plan_writable_root(codex_dir(home) / "config.toml", logbook))
     for t in [t for t in tools if t in BLOCK_CLIS]:
         c = clis.CLIS[t]
         changes.append(_block_change(clis.config_dir(t, home) / c.rule, render(logbook), f"{c.name} rule (managed block)"))
@@ -194,29 +240,58 @@ def plan_install(home: Path, logbook: Path, codex_override=False, tools=TOOLS, m
 
 
 def _plan_mcp(cli_id, home, register):
-    """Register (or remove) the local MCP server through the CLI's own command; a different `waypoint` server is
-    refused, never replaced."""
     c, f = clis.CLIS[cli_id], clis.mcp_file(cli_id, home)
     if not _real_home(home):  # the CLI's own command always writes the real home's config, whatever --home says
         return Change(f, "unchanged", note=f"{c.name} MCP server: not registered (only for your real home folder)")
-    entry, err = clis.mcp_entry(f)
-    old = json.dumps(entry, sort_keys=True) if entry is not None else None
-    note = f"{c.name} MCP server `waypoint`"
+    return mcp_change(cli_id, f, register)
+
+
+def mcp_snapshot(f: Path, project: Path | None = None):
+    """Both names' entries in f as comparable text: what the plan showed must still be there when the CLI runs."""
+    entries, err = clis.mcp_entries(f, project)
+    return (None, err) if err else (json.dumps(entries, sort_keys=True), None)
+
+
+def mcp_change(cli_id, f: Path, register, project: Path | None = None, reserved=()):
+    """Register or remove Waypoint through the CLI, choosing a free name without replacing another server."""
+    c = clis.CLIS[cli_id]
+    keyed = cli_id == "claude-code" and project is not None
+    note = f"{c.name} MCP server" + (f" for {project.name}" if project else "")
+    entries, err = clis.mcp_entries(f, project if keyed else None)
     if err:
-        return Change(f, "refuse", note=f"{note}: {err}")
-    if entry is not None and not clis.is_ours(entry):
-        if not register:
-            return Change(f, "unchanged", old, note=f"{note}: a different server ({clis.describe(entry)}); left alone")
-        return Change(f, "refuse", old, note=f"{note}: a different server ({clis.describe(entry)}) already has that name. "
-                                             f"Keep it and pass --no-mcp, or remove it: {c.exe} {' '.join(c.remove)}")
-    if register == (entry is not None):
-        return Change(f, "unchanged", old, note=note + (" (registered)" if register else ""))
+        return Change(f, "refuse", note=f"{note}: {f.name} {err}")
+    snap, (ours, free) = json.dumps(entries, sort_keys=True), clis.choose(entries)
+    if register and free in reserved:
+        free = next((n for n in clis.NAMES if entries.get(n) is None and n not in reserved), None)
+    where = {"cwd": project, "keyed": keyed}
+    if not register:
+        if ours is None:
+            return Change(f, "unchanged", snap, note=f"{note}: not registered"
+                          + ("; the `waypoint` entry is another server, left alone" if entries["waypoint"] else ""))
+        if not shutil.which(c.exe):
+            return Change(f, "unchanged", snap, note=f"{note}: `{ours}` is still registered, but `{c.exe}` isn't on "
+                                                      f"PATH to remove it. Remove the `{ours}` entry from {f} by hand")
+        names = tuple(n for n in clis.NAMES if entries.get(n) is not None and clis.is_ours(entries[n]))
+        return Change(f, "unregister", snap, note=f"{note} `{', '.join(names)}`",
+                      run=(c.exe, *clis.mcp_argv(cli_id, "remove", ours, project=project is not None)),
+                      run_more=tuple(clis.mcp_argv(cli_id, "remove", n, project=project is not None)
+                                     for n in names if n != ours), **where)
+    if ours is not None:
+        return Change(f, "unchanged", snap, note=f"{note} `{ours}` (registered)")
+    if free is None:
+        return Change(f, "refuse", snap, note=f"{note}: other servers already use both `waypoint` and `waypoint-local` "
+                                              f"({clis.describe(entries['waypoint'])}). Keep them and pass --no-mcp, "
+                                              "or remove one of them")
+    command = clis.server_command()
+    if command is None:
+        return Change(f, "refuse", snap, note=f"{note}: {clis.NO_COMMAND}")
     if not shutil.which(c.exe):
-        if not register:  # reported, but it doesn't block removing the rest
-            return Change(f, "unchanged", old, note=f"{note}: still registered, but `{c.exe}` isn't on PATH to remove it."
-                                                    f" Remove the `waypoint` entry from {f} by hand")
-        return Change(f, "refuse", old, note=f"{note}: `{c.exe}` isn't on PATH")
-    return Change(f, "register" if register else "unregister", old, note=note, run=(c.exe, *(c.add if register else c.remove)))
+        return Change(f, "refuse", snap, note=f"{note}: `{c.exe}` isn't on PATH")
+    why = ([f"`waypoint` is another server ({clis.describe(entries['waypoint'])}), so this one is `waypoint-local`"]
+           if free == "waypoint-local" and entries["waypoint"] is not None else []) + (["`waypoint` isn't on PATH, so it registers the full path"]
+                                             if command != "waypoint" else [])
+    return Change(f, "register", snap, note=f"{note} `{free}`" + "".join(f"; {w}" for w in why),
+                  run=(c.exe, *clis.mcp_argv(cli_id, "add", free, command, project is not None)), **where)
 
 
 def _plan_claude(home, logbook):
@@ -252,24 +327,99 @@ def _plan_codex(home, logbook, codex_override):
     return changes
 
 
-def plan_uninstall(home: Path, mcp=True):
+SANDBOX = ("# waypoint:sandbox:begin", "# waypoint:sandbox:end")
+
+
+def inside(path, root):
+    p, r = real(str(path)), real(str(root)).rstrip("\\/")
+    return p == r or p.startswith(r + ("\\" if "\\" in r else "/"))
+
+
+def _can_write(data: dict, lb: Path):
+    """Whether a parsed Codex config lets Codex write lb: full access, or lb under a writable root."""
+    if not isinstance(data, dict):
+        return False
+    if data.get("sandbox_mode") == "danger-full-access":
+        return True
+    table = data.get("sandbox_workspace_write")
+    roots = table.get("writable_roots") if isinstance(table, dict) else None
+    return isinstance(roots, list) and any(isinstance(r, str) and inside(lb, r) for r in roots)
+
+
+def codex_can_write(config: Path, lb: Path):
+    """True/False from a Codex config.toml; None when it can't be read."""
+    try:
+        data = tomllib.loads(config.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        data = {}
+    except (OSError, UnicodeError, tomllib.TOMLDecodeError):
+        return None
+    return _can_write(data, lb)
+
+
+def sandbox_block(lb: Path):
+    return f"[sandbox_workspace_write]\nwritable_roots = [{json.dumps(str(lb))}]"  # a JSON string is a TOML basic string
+
+
+def toml_edit(old: str | None, marks: tuple, block: str | None):
+    """Set a marked TOML block; None if the result is invalid TOML; ValueError for malformed markers."""
+    new = edit_block(old, block, *marks)
+    try:
+        tomllib.loads(new)
+    except tomllib.TOMLDecodeError:
+        return None
+    return new
+
+
+def plan_writable_root(config: Path, lb: Path | None, remove=False):
+    """Add or remove the marked Codex writable root, without editing a table Waypoint doesn't own."""
+    note = "Codex sandbox: let it write the logbook"
+    if remove:
+        return _block_change(config, None, note, *SANDBOX)
+    state = codex_can_write(config, lb)
+    if state is None:
+        return Change(config, "refuse", note=f"{note}: can't read {config.name}")
+    if state:
+        return Change(config, "unchanged", note=f"{note} (already allowed)")
+    old, _ = _read(config)
+    try:
+        new = toml_edit(old, SANDBOX, sandbox_block(lb))
+    except ValueError as e:
+        return Change(config, "refuse", old, note=f"{note}: {e}")
+    if new is None:
+        return Change(config, "unchanged", old, note=f"{note}: {config.name} already has a [sandbox_workspace_write] "
+                                                    f"table; add {lb} to its writable_roots yourself")
+    return Change(config, "create" if old is None else "update", old, new, note + " (adds it to writable_roots)")
+
+
+def plan_uninstall(home: Path, mcp=True, tools=None):
+    """Remove only what Waypoint added globally, for `tools` (default: every wired CLI)."""
+    tools = set(tools) if tools is not None else {c.id for c in clis.WIRED}
     changes = []
-    rf = claude_rule_file(home)
-    old, err = _read(rf)
-    if err:
-        changes.append(Change(rf, "refuse", note=err))
-    elif old is not None:
-        changes.append(Change(rf, "remove", old, None, "Claude Code rule file") if OWNED in old
-                       else Change(rf, "refuse", old, note="isn't Waypoint's; left alone"))
-    for f, note in ((claude_dir(home) / "CLAUDE.md", "older Waypoint block"),
-                    (codex_dir(home) / "AGENTS.md", "Codex rule block"),
-                    (codex_dir(home) / "AGENTS.override.md", "Codex override block"),
-                    *((clis.config_dir(t, home) / clis.CLIS[t].rule, f"{clis.CLIS[t].name} rule block") for t in BLOCK_CLIS)):
+    if "claude-code" in tools:
+        rf = claude_rule_file(home)
+        old, err = _read(rf)
+        if err:
+            changes.append(Change(rf, "refuse", note=err))
+        elif old is not None:
+            changes.append(Change(rf, "remove", old, None, "Claude Code rule file") if OWNED in old
+                           else Change(rf, "refuse", old, note="isn't Waypoint's; left alone"))
+    files = [(claude_dir(home) / "CLAUDE.md", "older Waypoint block")] if "claude-code" in tools else []
+    if "codex" in tools:
+        files += [(codex_dir(home) / "AGENTS.md", "Codex rule block"),
+                  (codex_dir(home) / "AGENTS.override.md", "Codex override block")]
+    files += [(clis.config_dir(t, home) / clis.CLIS[t].rule, f"{clis.CLIS[t].name} rule block")
+              for t in BLOCK_CLIS if t in tools]
+    for f, note in files:
         c = _block_change(f, None, note)
         if c.action != "unchanged":
             changes.append(c)
+    if "codex" in tools:
+        sandbox = plan_writable_root(codex_dir(home) / "config.toml", None, remove=True)
+        if sandbox.action != "unchanged":
+            changes.append(sandbox)
     if mcp:
-        changes += [c for c in (_plan_mcp(t.id, home, register=False) for t in clis.WIRED)
+        changes += [c for c in (_plan_mcp(t.id, home, register=False) for t in clis.WIRED if t.id in tools)
                     if c.action in ("unregister", "refuse") or "by hand" in c.note]
     return changes
 
@@ -295,6 +445,56 @@ def _atomic_write(f: Path, text: str):
         raise
 
 
+def link_state(f: Path):
+    """Where the symlink f points (as stored), or None when f isn't a symlink."""
+    try:
+        target = os.readlink(f) if f.is_symlink() else None
+        if target and target[:8].upper() == "\\\\?\\UNC\\":
+            return "\\\\" + target[8:]
+        return target[4:] if target and target.startswith("\\\\?\\") else target
+    except OSError:
+        return None
+
+
+@functools.lru_cache(maxsize=1)
+def can_symlink():
+    """Whether this OS lets Waypoint make file symlinks (Windows needs Developer Mode or admin rights)."""
+    with tempfile.TemporaryDirectory() as d:
+        try:
+            os.symlink(os.path.join(d, "target"), os.path.join(d, "link"))
+        except (OSError, NotImplementedError):
+            return False
+    return True
+
+
+def _link(c):
+    """Create, re-point, or remove a symlink if it still matches the plan."""
+    if link_state(c.target) != c.old or (c.old is None and c.target.exists()):
+        return "changed since it was shown; nothing written. Run the command again to see the new plan"
+    if c.new is None:
+        try:
+            c.target.unlink()
+        except OSError as e:
+            return f"{type(e).__name__}: {e}"
+        return None
+    tmp = None
+    try:
+        c.target.parent.mkdir(parents=True, exist_ok=True)
+        if c.old is None:
+            os.symlink(c.new, c.target)
+        else:
+            fd, tmp = tempfile.mkstemp(dir=c.target.parent, prefix=f".{c.target.name}.", suffix=".tmp")
+            os.close(fd)
+            os.unlink(tmp)
+            os.symlink(c.new, tmp)
+            os.replace(tmp, c.target)
+    except OSError as e:
+        if tmp:
+            Path(tmp).unlink(missing_ok=True)
+        return f"{type(e).__name__}: {e}"
+    return None
+
+
 def apply(changes):
     """Carry out create/update/remove changes; returns [(change, error or None)]. One failure doesn't stop the rest.
     A target that changed since it was planned (and shown) is refused, never overwritten."""
@@ -303,14 +503,20 @@ def apply(changes):
     for c in changes:
         if c.action not in WRITES:
             continue
-        if c.after is not None and (id(c.after) in failed or c.after.action == "refuse"):
+        dependencies = c.after if isinstance(c.after, tuple) else (c.after,) if c.after is not None else ()
+        if any(id(dep) in failed or dep.action == "refuse" for dep in dependencies):
             results.append((c, "skipped: it depends on a change that didn't happen"))
             failed.add(id(c))
             continue
-        if c.run:
-            results.append((c, _run(c)))
+        if c.run or c.action == "link":
+            results.append((c, _run(c) if c.run else _link(c)))
             if results[-1][1]:
                 failed.add(id(c))
+            continue
+        if c.action == "remove" and c.target.is_symlink() and c.remove_text is None:
+            action = "remove Waypoint's server entry from that file by hand" if c.target.name == "mcp.json" else "remove Waypoint's import from that file by hand"
+            results.append((c, f"{c.target} is a link to {c.target.resolve()}; {action}"))
+            failed.add(id(c))
             continue
         now, err = _read(c.target)
         if err or now != c.old:
@@ -318,13 +524,34 @@ def apply(changes):
             failed.add(id(c))
             continue
         try:
+            target = c.target
+            if c.replace_link and not c.target.is_symlink():
+                raise ValueError("changed since it was shown; nothing written. Run the command again to see the new plan")
+            if c.target.is_symlink():
+                target = c.target.resolve()
+                if c.replace_link:
+                    if target.name.casefold() != "global-rules.md":
+                        raise ValueError("replacing a link to a file other than Waypoint's GLOBAL-RULES.md is refused")
+                    if link_state(c.target) != c.link_target:
+                        raise ValueError("changed since it was shown; nothing written. Run the command again to see the new plan")
+                    shutil.copy2(target, _free_name(c.target, stamp))
+                    c.target.unlink()
+                    target = c.target
+                elif target.name.casefold() == "global-rules.md":
+                    raise ValueError("content changes to GLOBAL-RULES.md through a symlink are refused; use a link change")
             if c.target.exists():
                 shutil.copy2(c.target, _free_name(c.target, stamp))
             if c.new is None:
-                c.target.unlink()
+                if c.target.is_symlink():
+                    _atomic_write(target, c.remove_text if c.remove_text is not None else c.old)
+                else:
+                    target.unlink()
             else:
-                _atomic_write(c.target, c.new)
+                _atomic_write(target, c.new)
             results.append((c, None))
+        except ValueError as e:
+            results.append((c, str(e)))
+            failed.add(id(c))
         except OSError as e:
             results.append((c, f"{type(e).__name__}: {e}"))
             failed.add(id(c))
@@ -336,8 +563,8 @@ def _real_home(home):
 
 
 def _run(c):
-    entry, err = clis.mcp_entry(c.target)
-    if err or (json.dumps(entry, sort_keys=True) if entry is not None else None) != c.old:
+    snap, err = mcp_snapshot(c.target, c.cwd if c.keyed else None)
+    if err or snap != c.old:
         return "changed since it was shown; nothing run. Run the command again to see the new plan"
     exe = shutil.which(c.run[0])
     if not exe:
@@ -348,10 +575,13 @@ def _run(c):
     except OSError as e:
         return f"couldn't back up {c.target.name} first ({type(e).__name__}); nothing run"
     try:
-        r = subprocess.run([exe, *c.run[1:]], capture_output=True, text=True, timeout=60)
+        for args in ((c.run[1:],) + c.run_more):
+            r = subprocess.run([exe, *args], capture_output=True, text=True, timeout=60, cwd=c.cwd)
+            if r.returncode:
+                return f"{c.run[0]} failed: {(r.stderr or r.stdout).strip()[:300]}"
     except (OSError, subprocess.TimeoutExpired) as e:
         return f"{type(e).__name__} running {c.run[0]}"
-    return None if r.returncode == 0 else f"{c.run[0]} failed: {(r.stderr or r.stdout).strip()[:300]}"
+    return None
 
 
 def install(home: Path, logbook: Path, codex_override=False, tools=TOOLS):

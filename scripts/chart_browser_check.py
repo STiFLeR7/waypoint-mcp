@@ -138,6 +138,22 @@ def main(argv):
         page.wait_for_function("document.querySelector('#source-state').textContent.includes('huge.json')")
         check("Activity unknown" in page.locator("#catalog").inner_text(), "#2 out-of-range numbers become unknown")
         page.close()
+        behind = synthetic([proj("f-behind", updated="2026-10-01", now_behind=True,
+                                 logs=[{"ts": gen - 86400, "date": "2026-10-13", "tool": "codex", "text": "later"}]),
+                            proj("g-current", updated="2026-10-13", now_behind=False),
+                            proj("h-before-v1-2")])  # an older dashboard: no updated, no now_behind
+        (tmp / "behind.html").write_text(chart.render_html(behind), encoding="utf-8")
+        page = page_for(tmp / "behind.html", 1440)
+        chip = page.locator('#signal-filters [data-filter="behind"]')
+        check(chip.inner_text().startswith("Now behind log") and chip.locator(".count").inner_text() == "1",
+              "behind: the chip counts one project")
+        chip.click()
+        check(page.locator(".project-title").all_inner_texts() == ["f-behind"], "behind: the chip filters")
+        page.locator(".project-card").first.click()
+        panel = page.locator("#project-panel").inner_text()
+        check("Now is behind the log: updated 2026-10-01, newest entry 2026-10-13" in panel
+              and "may be out of date" in panel, "behind: the detail explains it in plain words")
+        page.close()
         only_untracked = synthetic([], untracked=[{"path": "/code/scratch", "last": gen - 60, "title": "t"}])
         (tmp / "untracked.html").write_text(chart.render_html(only_untracked), encoding="utf-8")
         page = page_for(tmp / "untracked.html", 390)

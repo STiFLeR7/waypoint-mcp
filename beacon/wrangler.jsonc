@@ -6,6 +6,11 @@
   "compatibility_date": "2026-09-15",
   // Must match BEACON_URL below.
   "routes": [{ "pattern": "beacon.example.com", "custom_domain": true }],
+  // Optional website: static files served for every path the Worker doesn't claim first.
+  // "assets": {
+  //   "directory": "<folder with your site>",
+  //   "run_worker_first": ["/mcp", "/mcp/*", "/authorize", "/authorize/*", "/token", "/register", "/callback", "/.well-known/*"]
+  // },
   "kv_namespaces": [
     // Replace with the id printed by: npx wrangler@4.151.0 kv namespace create OAUTH_KV
     { "binding": "OAUTH_KV", "id": "<your-kv-namespace-id>" }

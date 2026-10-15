@@ -1,13 +1,15 @@
-# Logbook Spec, v1.1
+# Logbook Spec, v1.2
 
 The **logbook** is the contract every tool (Claude Code, Codex, ChatGPT, or you) agrees on. It's plain files in a folder, ideally a private git repo. Tools write project files following these rules.
 
-**Who writes what (v1.1).** Nothing else writes to a logbook or to a tool's files:
-- `waypoint fix` writes only the chart files (§5).
+**Who writes what (v1.2).** Nothing else writes to a logbook or to a tool's files:
+- `waypoint refresh` (alias `fix`) writes only the chart files (§5).
 - `waypoint add` creates one project file from the template, with no log entry, and never overwrites (§1).
 - `waypoint init` / `setup` create missing logbook files; `setup` also records which logbook to use (§6).
-- Agents, following the rule (§7), append log entries and maintain `## Now` and `- Attention:` lines. They never change Status and never archive without the user's say-so.
-- Rule installers write only Waypoint's own rule file and the managed block between Waypoint's markers (§7).
+- Gemini CLI's per-repo MCP entry is in `<repo>/.gemini/settings.json`, written by `gemini mcp add --scope project`; when Waypoint created the file, it is listed in the repo's `.git/info/exclude` block (§7.1).
+- Agents, following the rule (§7), append log entries and maintain `## Now` (setting `- Updated:` when they edit it) and `- Attention:` lines. They never change Status and never archive without the user's say-so. `log_watch` (§8) adds one entry and, when asked, sets Done, Next and Updated in `## Now` (§8.3).
+- `waypoint archive` / `restore` move one project file between `projects/` and `projects/_archive/`; `waypoint remove` deletes one project file at the user's request (`remove --ignore` also adds one line to `projects/_ignore.txt`); `waypoint ignore` adds or removes one line in `projects/_ignore.txt`. All hold the logbook lock and never change a project file's contents.
+- Rule installers write only Waypoint's own rule file, the managed block between Waypoint's markers, and links Waypoint made (§7). Per-project installs (§7.1) also write Waypoint's marked blocks in a repo's `.codex/config.toml` and `.git/info/exclude`, and one key in `.github/mcp.json`.
 
 Key words: **must**, **should** and **may** carry their usual RFC meaning. Story terms (see `STORY.md`) never appear in rules; this spec uses plain terms.
 
@@ -49,6 +51,7 @@ Key words: **must**, **should** and **may** carry their usual RFC meaning. Story
 ## Now
 - Done: <latest milestone>
 - Next: <next step>
+- Updated: YYYY-MM-DD             # optional (v1.2): when Now was last brought up to date
 
 ## Log
 ### YYYY-MM-DD — <tool id>
@@ -60,7 +63,7 @@ Key words: **must**, **should** and **may** carry their usual RFC meaning. Story
   - `Path`, `Status`, `Summary`, `Docs` and `Attention` are read **only** from the header.
   - For single-value fields, the **first** occurrence wins.
   - `Attention` collects every occurrence.
-- **Now** is the body of the first `## Now` heading before `## Log`. `Done` and `Next` are read only there, first occurrence wins.
+- **Now** is the body of the first `## Now` heading before `## Log`. `Done`, `Next` and `Updated` (v1.2) are read only there, first occurrence wins. `Updated` must be a calendar date `YYYY-MM-DD`; any other text reads as empty and is reported as a logbook diagnostic (§4.1).
 - **Log:** the first line matching `^## Log[ \t]*$` starts the log, and **everything after it is log body**, including any later `## ` lines. A heading pasted inside the log can't replace Now or create header fields.
 - Section heading names are matched case-insensitively. Other `## ` sections before Log are allowed and ignored.
 - Field lines match `^- <Field>:[ \t]*(.+)$`. A missing field reads as empty string.
@@ -129,10 +132,21 @@ A source problem must never stop the chart.
 - `claude`, `codex`, `git`: newest timestamp from each source (0 if none).
 - `last` and `last_tool`: the newest of `(claude, "claude-code")`, `(codex, "codex")`, `(git, "git")` and `(log, <tool id of newest entry>)`. On equal timestamps the priority is log, claude-code, codex, git.
 - `unlogged` = the number of Claude Code and Codex sessions on the project whose timestamp is **≥ local midnight following the newest log entry's date**. If the project has **no** log entry, every such session counts.
+- `updated` (v1.2): the Now section's `Updated` date, or `""`.
+- `now_behind` (v1.2) is true when `updated` is set and the newest authored (not future-dated) log entry's date is later than it. An entry on the same day as `Updated` is not behind. No `Updated` line means `false`.
+- Entries are dated, not timed: activity later on the same day as the newest entry counts as logged.
 - Future-dated authored log entries remain available in `logs` but are excluded when choosing the latest activity and the unlogged cutoff. They are flagged in logbook health. The pulse and feed also exclude future events (§5.1).
 
 ### 4.5 Untracked folders
 Mapped folders (§4.2) with a Claude Code or Codex session within `untracked_days` that aren't tracked (§1) and aren't ignored (§4.3).
+
+### 4.6 What the signals mean
+- Activity means a tool touched the project (a session, a commit or a log entry). It doesn't mean work got done.
+- Unlogged is counted per day: sessions after the day of the newest log entry. Entries have dates, not times.
+- Now behind log means the Now section was last updated before the newest log entry, so Where you left off and Next may be out of date. Only projects with an `Updated` line can show it.
+- A log entry records what someone wrote. It doesn't verify the code.
+- Available context isn't proof that an agent read it.
+- `chart.html` and `DASHBOARD.md` are snapshots from the last `waypoint refresh`. The local MCP server reads the logbook live (AI activity is cached for up to 30 seconds). The beacon's dashboard fields are as of the last push; its log entries are read live.
 
 ## 5. The chart (generated)
 
@@ -150,10 +164,10 @@ The engine writes `DASHBOARD.md` (for people), `dashboard.json` (for programs) a
   "config": { "stale_days": {"active": 21, "occasional": 60}, "pulse_days": 35, "untracked_days": 30 },
   "sources": { "claude-code": {"state": "ok", "detail": ""}, "codex": {...}, "git": {...}, "logbook": {...} },
   "rules":   { "logbook": "in-sync|drifted|missing", "claude-code": "...", "codex": "...|shadowed" },
-  "kpi": { "tracked": 14, "attention": 7, "velocity": 12, "stale": 0, "untracked": 20, "unlogged": 5 },
+  "kpi": { "tracked": 14, "attention": 7, "velocity": 12, "stale": 0, "untracked": 20, "unlogged": 5, "behind": 1 },
   "projects": [ {
-      "name", "file", "path", "status", "summary", "docs": [], "done", "next", "attention": [],
-      "last", "last_tool", "idle", "claude", "codex", "git", "stale": false, "unlogged": 0,
+      "name", "file", "path", "status", "summary", "docs": [], "done", "next", "updated": "", "attention": [],
+      "last", "last_tool", "idle", "claude", "codex", "git", "stale": false, "unlogged": 0, "now_behind": false,
       "logs": [ {"ts", "date", "tool", "text"} ]
   } ],
   "archived":  [ {"name", "file", "summary", "done", "logs"} ],
@@ -169,6 +183,7 @@ The engine writes `DASHBOARD.md` (for people), `dashboard.json` (for programs) a
   - `stale` = projects past their threshold.
   - `untracked` = untracked folders.
   - `unlogged` = projects with `unlogged > 0`.
+  - `behind` (v1.2) = projects with `now_behind`.
 - **Pulse:** one key per local calendar day, today and the `pulse_days − 1` days before it, **zeros included**. It counts Claude Code and Codex sessions (by timestamp) and log entries (by date, per tool id) for tracked projects and untracked folders. Archived projects, ignored folders and future-dated events are excluded.
 - **Feed:** the same events within the same window, keeping only those with text. `kind` says where an event came from: `session` (a Claude Code or Codex session, with its title as `text`) or `log` (a log entry in a project file; a log entry's `ts` is local midnight of its date). Sorted newest first, ties broken by project name, then tool. At most `feed_max` items.
 - **Ordering:**
@@ -183,7 +198,7 @@ A single self-contained page, opened straight from disk (`file://`).
 - The page renders every value as text, never as HTML. It makes no network requests and loads nothing from outside the file; a Content-Security-Policy enforces this.
 - It shows only the embedded data. It may also open another `dashboard.json` the user picks; it never writes files.
 - An empty logbook shows an empty state, not sample data.
-- `waypoint fix --open` opens the page in the default browser.
+- `waypoint refresh --open` opens the page in the default browser.
 
 ## 6. `waypoint.toml`
 
@@ -211,9 +226,18 @@ Every key is optional and the defaults are shown above. `roots` defaults to the 
 - **Codex** has no import syntax and no rules folder, so `~/.codex/AGENTS.md` holds a copy in a managed block. `in-sync` = it contains the canonical text exactly. Compare after normalizing line endings and trailing whitespace; other content in the file is allowed.
   - If `~/.codex/AGENTS.override.md` exists and isn't empty, Codex reads it **instead of** `AGENTS.md`: the state is `in-sync` only if the override holds the canonical text, else `shadowed`.
 - **Gemini CLI** (`<GEMINI_CLI_HOME or ~>/.gemini/GEMINI.md`) and **GitHub Copilot CLI** (`<COPILOT_HOME or ~/.copilot>/copilot-instructions.md`) hold a copy in a managed block, checked like Codex (no override file). They are wired only when their executable is on PATH.
-- **Local MCP registration (v1.1):** for Claude Code, Codex, Gemini CLI and Copilot CLI, `setup` and `connect` register the server `waypoint` (`waypoint mcp`) through the CLI's own `mcp add` command, user scope. An existing `waypoint` registration that isn't `waypoint mcp` is refused, never replaced (`--no-mcp` skips registration). Uninstall removes only a registration that is `waypoint mcp`. Registration runs only against the real home folder. The CLI's config file is backed up before its command runs; the CLI writes the file itself, so that write is only as atomic as the CLI makes it. Other CLIs get printed config (`waypoint connect <cli>`); Waypoint writes nothing for them.
+- **Local MCP registration (v1.1):** for Claude Code, Codex, Gemini CLI and Copilot CLI, `setup` and `connect` register `waypoint` (`waypoint mcp`), or `waypoint-local` when `waypoint` is another server (for example, a remote beacon). Waypoint refuses registration only when both names are already taken by servers it does not own. A foreign entry is never replaced or removed; uninstall removes only Waypoint's own entry under either name. Global registration uses user scope; per-project registration uses repo scope (§7.1). `--no-mcp` skips registration. Global registration runs only against the real home folder. The CLI's config file is backed up before its command runs; the CLI writes the file itself, so that write is only as atomic as the CLI makes it. Other CLIs get printed config (`waypoint connect <cli>`); Waypoint writes nothing for them.
 - **Installers** plan every change and show it before writing; an unchanged file is not written; bytes outside the managed block (including line endings) are kept; a file whose markers are malformed (not exactly one begin before one end, or none) is refused; changed files are backed up, then replaced atomically. Uninstall removes only Waypoint's own file and blocks.
 - Drift is shown as an Attention-level item on the chart.
+
+### 7.1 Per-project install (v1.2, additive)
+`waypoint connect <cli> --project <repo>` wires one repo and nothing in the home config. `waypoint disconnect <cli> [--project <repo>]` removes exactly what was added.
+- **Rule, best method first:** *import* (Claude Code: `<repo>/.claude/rules/waypoint.md` holds Waypoint's marker and `@<logbook>/GLOBAL-RULES.md`; Claude Code asks once per repo before loading a file from outside it); *symlink* (Codex `AGENTS.md`, Copilot CLI `.github/copilot-instructions.md`, only when the file doesn't exist and the OS allows links); *copy* (a managed block, as in §7; always for Gemini CLI `GEMINI.md`, which only imports files inside the repo). A link pointing at any `GLOBAL-RULES.md` is Waypoint's; any other link or file in the way is refused. `--copy` turns Waypoint's link into a file with a copied block. `waypoint rules --install` refreshes drifted copies and re-points broken links in every tracked and archived project.
+- **MCP entry:** Claude Code `claude mcp add -s local` and Gemini CLI `gemini mcp add -s project`, run in the repo (real home only); Gemini's per-repo entry lives in `<repo>/.gemini/settings.json`; Codex: a marked block in `<repo>/.codex/config.toml`, read by Codex only in trusted folders (Waypoint reports trust, never sets it); Copilot CLI: the server key in `<repo>/.github/mcp.json`. The server is named `waypoint`, or `waypoint-local` when `waypoint` is another server; both names are Waypoint's when they run `waypoint mcp`. When `waypoint` isn't on PATH, the absolute path of this installation's script is registered.
+- **Codex sandbox:** the logbook in `[sandbox_workspace_write] writable_roots` is a reviewed change in a marked block, in the global `config.toml` (global install) or the repo's (per project); a table Waypoint didn't write is left to the user.
+- **Git hygiene:** files Waypoint creates in a repo are listed in a marked block of `.git/info/exclude`; this includes `<repo>/.gemini/settings.json` when Waypoint created it. A tracked file is edited only with `--allow-tracked`.
+- Repo-local backup files use matching `*.bak-*` patterns in that same exclude block, so updates do not add backup files to commits.
+- **Discovery:** there is no registry; `status` and uninstall look in each tracked and archived project's folder, including Gemini's `<repo>/.gemini/settings.json` entry written by `gemini mcp add --scope project`. A CLI with the rule both globally and in a repo is reported (`rule-twice`); a link whose target is gone is `broken`. Not detected: Claude Code also reading a repo's `AGENTS.md`.
 
 ## 8. Access contracts
 
@@ -223,32 +247,41 @@ Every key is optional and the defaults are shown above. `roots` defaults to the 
 - A supplied MCP protocol-version header must be supported; invalid or unsupported values are rejected before dispatch, except on `initialize`, which negotiates the version in its body. When absent, the server uses its documented compatibility version.
 - **Scope:** exactly one logbook. Projects are addressed **by name only**, and the name must be in the server's own list of tracked projects. Paths, traversal and unknown names are rejected.
 - Existing names are preserved verbatim, including names longer than the CLI creation limit. Writes target exactly `projects/<name>.md`; names that cannot safely identify that direct child are rejected.
-- **Read results may include:** KPIs; and for each project its name, status, idle, last_tool, unlogged, Summary, Done, Next and log entries. These are owner-authored text, returned only to the authenticated owner.
+- **Read results may include:** KPIs; and for each project its name, status, idle, last_tool, unlogged, now_behind, Summary, Done, Next and log entries, and in `read_chart` its `updated` date (v1.2). These are owner-authored text, returned only to the authenticated owner.
 - Reads may include a privacy-safe aggregate collection-health cue `data_complete` (`true`, `false`, or `null` for unknown) without source names or diagnostics. Counts describe observed records; successful collection and zero unlogged sessions are not proof of complete history.
 - `read_chart` identifies snapshot fields and their generation time separately from logs read from the current project file. These sources can have different freshness.
 - **Reads never include:** session titles, the feed, the pulse's per-session data, untracked folders, file paths, Attention text, source details, or rule state.
-- **The single write tool** adds one log entry (tool id `chatgpt`) to an existing tracked project:
+- **The single write tool** adds one log entry with the caller's tool id (`tool`, from the known list in §2.3; default `chatgpt`) to an existing tracked project:
   - inserted **directly below the `## Log` line**, with every line of the text quoted with `> ` (§2.2);
   - written through the git host using the file's version (sha);
   - dates use valid calendar years 0001–9999; an omitted date uses the server's documented UTC date, so clients needing a local calendar date supply it;
   - before any retry, it re-reads the file and **skips the write if an identical entry (same date, tool and text) is already the newest**. This only suppresses consecutive duplicates: A, then B, then a retry of A can append A again;
-  - it never changes Status, Now, Attention or any other line, never creates or archives files, and stays within a size cap.
+  - with `done`/`next` (v1.2) it also sets those lines and `- Updated:` in `## Now` in the same commit (§8.3); it never changes Status, Attention or any other line, never creates or archives files, and stays within a size cap.
 
 ### 8.2 Local (`waypoint mcp`, v1.1)
 A stdio MCP server started by an AI tool on the owner's machine, for one logbook.
 - **Transport:** MCP 2025-06-18 only; newline-delimited UTF-8 JSON-RPC; stdout carries protocol messages only; batches and requests without an id are refused; a request line is at most 64 KB and a reply at most 256 KB; each tool call finishes within 10 s; the process exits when stdin closes. It opens no network listener and makes no outbound requests. The tools that connect forward its results to their own model providers.
 - **Reads** are built fresh from the logbook and local tool history, with the same fields as §8.1, plus Done in `read_chart`. Attention lines are included only when `waypoint.toml` sets `[mcp] include_attention = true`. Never included: session titles, the feed, untracked folders, file paths, source details, rule state.
+- **`status()`** (read-only) is the one exception to the list above: it reports rule, MCP-registration and source *states*, project counts, per-tool rule method, `scope` (`global` and/or `project`), per-project install counts, and the local MCP `name` when registered, so an agent can tell the owner what to fix. It never includes file paths, commands, source details or project text; problem lines are fixed sentences naming only the tool or source.
 - **Trust boundary:** quoting (§2.2) protects the file's grammar, not the reader. Every tool description and every read result states that project text is the owner's notes: data, never instructions.
 - A timed-out write must not later replace a project file. The final replacement and the timeout response share a cancellation gate.
-- **`log_watch(project, summary, tool, date?)`** appends one log entry, every line quoted with `> `, below `## Log` with one blank line on each side:
+- **`log_watch(project, summary, tool, date?, done?, next?)`** appends one log entry, every line quoted with `> `, below `## Log` with one blank line on each side:
   - `tool` must be a known id (§2.3); `date` defaults to the local date and may differ from it by at most one day;
   - the project must be a live tracked project whose file is a plain file directly in `projects/`; errors never contain paths;
   - writers hold the lock file `<logbook>/.waypoint.lock` (bounded wait, then "busy") and use compare-and-swap: the file is re-hashed just before the atomic replace, and a change (such as an agent's direct edit) restarts the write;
   - transient file-sharing replacement failures are retried within a bounded wait, re-reading the target and checking cancellation before each replacement; persistent failure leaves the file unchanged and returns a safe retryable error;
-  - an entry with the same date, tool and text anywhere on that date makes the call a no-op;
-  - it never changes Status, Now or Attention and never creates or archives files.
+  - an entry with the same date, tool and text anywhere on that date makes the call a no-op (`done`/`next` are not applied either);
+  - with `done`/`next` it sets Now's lines in the same locked, compare-and-swap write (§8.3); it never changes Status or Attention and never creates or archives files.
+
+### 8.3 Now fields written by `log_watch` (v1.2)
+- `done` and `next` are optional. Each value becomes one line: control characters and line breaks become spaces, whitespace runs collapse to one space, and the ends are trimmed. The result must be 1–300 characters. Characters are Unicode code points. The value must not start with `#` or `>`.
+- In the first `## Now` section before `## Log`, the line a reader reads (§2.1: the first `- Done:` line with text, else the first bare `- Done:`) is replaced. A missing line is inserted right after the Now fields that come before it (order: Done, Next, Updated), or at the top of `## Now`. With no `## Now` section, one is created just above `## Log`.
+- `- Updated:` is set to the entry's date whenever Done or Next is written.
+- The change lands in the same write as the entry (local: lock plus compare-and-swap; beacon: the same sha). When the entry already exists (a no-op), nothing is applied, Now included. Every other byte and the file's line endings are kept.
+- Attention is never written through MCP.
 
 ## 9. Versioning
 - `dashboard.json` carries `"schema": 1`. Readers should ignore unknown fields.
 - **v1.1** (2026-10-14) is additive: tracked-Path matching (§4.2), `waypoint add` (§1), logbook discovery and tool folders (§6), the Claude Code rules file and Codex `shadowed` state (§7), the `logbook` source (§4.1), writer tool ids (§2.3), the local MCP contract (§8.2) and `chart.html` (§5.2). Existing logbooks need no changes; `dashboard.json` stays schema 1.
+- **v1.2** (2026-10-15) is additive: the optional `Updated` line in `## Now` (§2.1), `updated`, `now_behind` and `kpi.behind` (§4.4, §5.1), `log_watch` `done`/`next` (§8.3), and per-project install (§7.1). Existing logbooks need no changes; `dashboard.json` stays schema 1.
 - Grammar changes that break existing readers bump this spec's major version.

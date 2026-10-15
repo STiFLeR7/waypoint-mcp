@@ -29,7 +29,7 @@ def mcp(exe, lb, cwd, *calls):
                        capture_output=True, text=True, encoding="utf-8", timeout=60)
     replies = {m["id"]: m for m in map(json.loads, r.stdout.splitlines())}  # stdout must be protocol only
     assert replies[0]["result"]["protocolVersion"] == "2025-06-18"
-    assert {t["name"] for t in replies[1]["result"]["tools"]} == {"take_fix", "read_chart", "log_watch"}
+    assert {t["name"] for t in replies[1]["result"]["tools"]} == {"take_fix", "read_chart", "log_watch", "status"}
     return [replies[i]["result"] for i in range(2, 2 + len(calls))]
 
 
@@ -42,13 +42,13 @@ def main():
         for d in (home, code / "alpha", elsewhere):
             d.mkdir(parents=True)
         out = run(exe["waypoint"], "--version", cwd=elsewhere)
-        assert "(logbook spec v1.1)" in out, out
+        assert "(logbook spec v1.2)" in out, out
         run(exe["waypoint-mcp"], "--help", cwd=elsewhere)
         run(exe["waypoint"], "setup", "--yes", "--logbook", str(lb), "--root", str(code), "--no-mcp", "--home", str(home),
             cwd=elsewhere)
         assert (lb / "projects" / "_template.md").exists()
         run(exe["waypoint"], "add", str(code / "alpha"), "--logbook", str(lb), cwd=elsewhere)
-        assert "Fix taken" in run(exe["waypoint"], "fix", "--logbook", str(lb), "--home", str(home), cwd=elsewhere)
+        assert "Dashboard refreshed" in run(exe["waypoint"], "fix", "--logbook", str(lb), "--home", str(home), cwd=elsewhere)
         page = (lb / "chart.html").read_text(encoding="utf-8")  # the template shipped as package data
         assert '<script type="application/json" id="waypoint-data">{"schema":1,' in page, page[:200]
 

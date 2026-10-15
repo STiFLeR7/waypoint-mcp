@@ -262,6 +262,30 @@ class Grammar(unittest.TestCase):
         self.assertEqual(logbook.field(f["header"], "Status"), "paused")
 
 
+class NowUpdated(Env):
+    """Spec v1.2 §2.1: optional `- Updated: YYYY-MM-DD`, read only from ## Now."""
+
+    def load(self, now, extra=""):
+        self.write_project("alpha", project(self.root / "alpha", now=now, extra=extra))
+        diags = []
+        p = logbook.load_projects(self.lb, diags)[0]
+        return p["updated"], diags
+
+    def test_valid_absent_blank_and_scoped(self):
+        self.assertEqual(self.load("- Done: d\n- Updated: 2026-10-01\n"), ("2026-10-01", []))
+        self.assertEqual(self.load("- Done: d\n"), ("", []))
+        self.assertEqual(self.load("- Updated:\n"), ("", []))  # blank: absent, no diagnostic
+        self.assertEqual(self.load("- Done: d\n", extra="- Updated: 2026-10-01"), ("", []))  # header line: not Now
+        self.assertEqual(self.load("- Updated: 2026-10-02\n- Updated: 2026-10-01\n"), ("2026-10-02", []))  # first wins
+
+    def test_invalid_dates_are_empty_with_a_diagnostic(self):
+        for bad in ("2026-13-01", "2026-02-30", "0000-01-01", "yesterday", "2026-1-5", "2026-10-01 by hand"):
+            with self.subTest(bad=bad):
+                updated, diags = self.load(f"- Updated: {bad}\n")
+                self.assertEqual(updated, "")
+                self.assertEqual(diags, ["projects/alpha.md: unsupported Updated date (use YYYY-MM-DD)"])
+
+
 class Sources(Env):
     def test_claude_bad_transcript_does_not_hide_history_and_empty_title_wins(self):
         d = self.home / ".claude" / "projects" / "slug"
@@ -362,6 +386,10 @@ class ChartEnv(Env):
 
 
 class Chart(ChartEnv):
+    def test_empty_roots_override_configured_roots(self):
+        d = chart.build(self.lb, self.home, now=NOW, roots=[])
+        self.assertEqual(d["untracked"], [])
+
     def test_projects_kpis_and_ordering(self):
         d = self.build()
         alpha, beta = d["projects"]
@@ -372,9 +400,48 @@ class Chart(ChartEnv):
         self.assertEqual(beta["idle"], 74)
         self.assertTrue(beta["stale"])  # occasional, 74 > 60
         self.assertEqual(alpha["docs"], ["a.md", "docs/b.md"])
-        self.assertEqual(d["kpi"], {"tracked": 2, "attention": 2, "velocity": 1, "stale": 1, "untracked": 1, "unlogged": 2})
+        self.assertEqual(d["kpi"], {"tracked": 2, "attention": 2, "velocity": 1, "stale": 1, "untracked": 1, "unlogged": 2, "behind": 0})
         self.assertEqual([p["name"] for p in d["archived"]], ["old"])
         self.assertEqual([Path(u["path"]).name for u in d["untracked"]], ["gamma"])  # archived=tracked, ignored skipped
+
+    def test_html_has_the_now_behind_signal_as_text(self):
+        from importlib import resources
+        t = resources.files("waypoint").joinpath("templates", "chart.html").read_text(encoding="utf-8")
+        self.assertIn("['behind','Now behind log']", t)
+        self.assertIn("x.now_behind===true", t)
+        self.assertIn("The Now section was last updated before the newest log entry, so Where you left off and Next "
+                      "may be out of date.", t)
+        self.assertIn('.filter-chip[data-filter="behind"]', t)
+
+
+class NowBehind(ChartEnv):
+    """Spec v1.2 §4.4: now_behind = Updated is a valid date and the newest authored log entry is later."""
+
+    def alpha(self, updated, log="### 2026-10-12 — codex\n- logged work\n"):
+        self.write_project("alpha", project(self.root / "alpha", now=f"- Done: d\n- Next: ship it\n{updated}", log=log))
+        d = self.build()
+        return d, next(p for p in d["projects"] if p["name"] == "alpha")
+
+    def test_behind_current_same_day_and_absent(self):
+        cases = [("- Updated: 2026-10-01\n", True), ("- Updated: 2026-10-12\n", False),  # same day: not behind
+                 ("- Updated: 2026-10-13\n", False), ("", False), ("- Updated: soon\n", False)]
+        for line, behind in cases:
+            with self.subTest(line=line):
+                d, a = self.alpha(line)
+                self.assertIs(a["now_behind"], behind)
+                self.assertEqual(d["kpi"]["behind"], int(behind))
+
+    def test_future_dated_entries_do_not_count(self):
+        _, a = self.alpha("- Updated: 2026-10-12\n", log="### 2026-10-20 — codex\n- future\n### 2026-10-12 — codex\n- x\n")
+        self.assertFalse(a["now_behind"])
+
+    def test_dashboard_fields_and_markdown(self):
+        d, a = self.alpha("- Updated: 2026-10-01\n")
+        self.assertEqual((a["updated"], a["now_behind"]), ("2026-10-01", True))
+        self.assertNotIn("now_behind", d["archived"][0])
+        chart.write(self.lb, d)
+        md = (self.lb / "DASHBOARD.md").read_text(encoding="utf-8")
+        self.assertIn("Now is behind the log: updated 2026-10-01, newest entry 2026-10-12", md)
 
     def test_stale_is_strict(self):
         self.write_project("beta", project(self.root / "beta", status="occasional",
@@ -432,6 +499,9 @@ class Chart(ChartEnv):
         spec = (Path(__file__).resolve().parents[1] / "docs" / "LOGBOOK-SPEC.md").read_text(encoding="utf-8")
         self.assertIn(r"written as `\u003c`, `\u003e`, `\u0026`, `\u2028` and `\u2029`", spec)
         self.assertFalse({"\u2028", "\u2029"} & set(spec))
+        self.assertIn("# Logbook Spec, v1.2", spec)
+        self.assertIn("`now_behind` (v1.2) is true", spec)
+        self.assertIn("### 8.3 Now fields written by `log_watch` (v1.2)", spec)
 
     def test_html_template_is_package_data_and_offline(self):
         from importlib import resources
@@ -451,6 +521,13 @@ class Chart(ChartEnv):
 
 
 class Rules(Env):
+    def test_rule_text_v1_2(self):
+        text = rules.render(self.lb)
+        self.assertIn(f"Run `waypoint refresh --logbook {self.lb.resolve().as_posix()}`", text)
+        self.assertNotIn("waypoint fix", text)
+        self.assertIn("When you use `log_watch`, pass `done`/`next` too if the work changed them, or pass the current values unchanged to confirm Now is still accurate", text)
+        self.assertIn("When you edit `## Now` by hand, set `- Updated: <today's date, YYYY-MM-DD>`", text)
+
     def test_render_check_install(self):
         canonical = rules.render(self.lb)
         self.assertNotIn("{logbook}", canonical)
@@ -478,14 +555,22 @@ class Rules(Env):
 
 
 class Cli(unittest.TestCase):
+    def test_version_names_spec_1_2(self):
+        from waypoint import status
+        out = io.StringIO()
+        with redirect_stdout(out), self.assertRaises(SystemExit):
+            cli.main(["--version"])
+        self.assertIn("(logbook spec v1.2)", out.getvalue())
+        self.assertEqual(status.SPEC, "1.2")
+
     def test_fix_summary_pluralization(self):
         expected = {
-            0: "No voyages (projects) charted yet; 0 folders with recent AI activity are uncharted (untracked). "
-               "Chart one: waypoint add <folder>\n",
-            1: "Fix taken (sync): 1 voyage (project), 0 underway (active) this week, 1 hazard (attention item), "
-               "0 with unlogged watches (sessions), 0 adrift (stale), 0 uncharted (untracked folders).\n",
-            2: "Fix taken (sync): 2 voyages (projects), 0 underway (active) this week, 2 hazards (attention items), "
-               "0 with unlogged watches (sessions), 0 adrift (stale), 0 uncharted (untracked folders).\n",
+            0: "Dashboard refreshed. No projects tracked yet; 0 folders with recent AI activity are untracked. "
+               "Track one: waypoint add <folder>\n",
+            1: "Dashboard refreshed: 1 project, 0 active this week, 1 attention item, "
+               "0 with unlogged sessions, 0 stale, 0 untracked folders.\n",
+            2: "Dashboard refreshed: 2 projects, 0 active this week, 2 attention items, "
+               "0 with unlogged sessions, 0 stale, 0 untracked folders.\n",
         }
         for count in (0, 1, 2):
             with self.subTest(count=count), tempfile.TemporaryDirectory() as t:
@@ -803,6 +888,26 @@ class AddAndSetup(Env):
             cli.main(list(args))
         return out.getvalue()
 
+    def test_template_has_no_updated_line_so_new_projects_never_show_behind(self):
+        """Plan 2 decision: no `- Updated:` placeholder. A hand-copied template keeps its placeholders, and
+        `<YYYY-MM-DD>` would read as a bad date; log_watch and the rule add the line with a real date."""
+        self.run_cli("init", str(self.lb))
+        self.assertNotIn("Updated", (self.lb / "projects" / "_template.md").read_text(encoding="utf-8"))
+        self.run_cli("add", str(self.root / "alpha"), "--logbook", str(self.lb))
+        self.assertEqual(logbook.load_projects(self.lb)[0]["updated"], "")
+        alpha = next(p for p in self.build()["projects"] if p["name"] == "alpha")
+        self.assertFalse(alpha["now_behind"])
+
+    def test_refresh_is_the_plain_name_and_fix_still_works(self):
+        self.run_cli("init", str(self.lb))
+        out = self.run_cli("refresh", "--logbook", str(self.lb), "--home", str(self.home))
+        self.assertTrue((self.lb / "chart.html").exists())
+        self.assertIn("Dashboard refreshed", out)
+        (self.lb / "chart.html").unlink()
+        self.run_cli("fix", "--logbook", str(self.lb), "--home", str(self.home))
+        self.assertTrue((self.lb / "chart.html").exists())
+        self.assertIn("waypoint refresh", (self.lb / "DASHBOARD.md").read_text(encoding="utf-8"))
+
     def test_add_creates_a_filled_file_without_a_log_entry(self):
         self.run_cli("init", str(self.lb))
         out = self.run_cli("add", str(self.root / "alpha"), "--logbook", str(self.lb))
@@ -857,7 +962,7 @@ class AddAndSetup(Env):
         self.assertEqual(load(lb).roots, [str(self.root.resolve())])
         self.assertTrue((self.home / ".codex" / "AGENTS.md").exists())
         self.assertFalse(rules.claude_rule_file(self.home).exists())  # only the tool asked for
-        self.assertIn("No voyages", self.run_cli("fix", "--home", str(self.home)))  # no --logbook
+        self.assertIn("No projects tracked", self.run_cli("fix", "--home", str(self.home)))  # no --logbook
         again = self.run_cli("setup", "--yes", "--logbook", str(lb), "--root", str(self.root), "--tool", "codex",
                              "--no-mcp", "--home", str(self.home))
         self.assertIn("Nothing to change.", again)  # idempotent
@@ -870,3 +975,13 @@ class AddAndSetup(Env):
         os.environ["WAYPOINT_LOGBOOK"] = str(self.root)
         self.assertEqual(find_logbook(None)[0], self.root)
         self.assertEqual(find_logbook("x")[0], Path("x"))
+
+
+class Example(unittest.TestCase):
+    def test_example_shows_each_now_state(self):
+        d = json.loads((Path(__file__).resolve().parents[1] / "examples" / "logbook" / "dashboard.json")
+                       .read_text(encoding="utf-8"))
+        by = {p["name"]: (p["updated"], p["now_behind"]) for p in d["projects"]}
+        self.assertEqual(by, {"aurora": ("2026-10-10", False), "tidewater": ("2026-07-28", True),
+                              "lighthouse": ("", False)})
+        self.assertEqual(d["kpi"]["behind"], 1)

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "waypoint-mcp"
-version = "0.2.1"
+version = "0.3.0"
 description = "Every voyage, every navigator, one chart: track your projects across Claude Code, Codex, Gemini CLI, Copilot CLI and ChatGPT."
 readme = "README.md"
 license = "Apache-2.0"
@@ -24,6 +24,9 @@ classifiers = [
     "Topic :: Software Development",
 ]
 
+[project.optional-dependencies]
+tui = ["rich>=13", "prompt_toolkit>=3"]  # the arrow-key screen; the engine and MCP server stay dependency-free
+
 [project.urls]
 Homepage = "https://github.com/STiFLeR7/waypoint-mcp"
 Issues = "https://github.com/STiFLeR7/waypoint-mcp/issues"
@@ -34,7 +37,7 @@ waypoint = "waypoint.cli:main"
 waypoint-mcp = "waypoint.mcp:main"
 
 [tool.setuptools]
-packages = ["waypoint", "waypoint.sources"]
+packages = ["waypoint", "waypoint.sources", "waypoint.tui"]
 
 [tool.setuptools.package-data]
 waypoint = ["templates/*.md", "templates/*.html", "templates/logbook/*"]

@@ -1,7 +1,7 @@
 // log_watch: placement, quoting, idempotency, sha conflicts, caps and UTF-8 (LOGBOOK-SPEC §2.2, §8).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readLog, parseEntries, toBase64, fromBase64, insertEntry, FILE_MAX_BYTES } from "../src/logbook.ts";
+import { readLog, parseEntries, toBase64, fromBase64, insertEntry, setNow, FILE_MAX_BYTES } from "../src/logbook.ts";
 import { ALPHA, client, fakeGithub, standardRepo, dashboard } from "./fakes.ts";
 
 const at = ALPHA.indexOf("## Log\n") + "## Log\n".length;
@@ -21,6 +21,39 @@ test("inserts under ## Log after one blank line, quotes every line, leaves every
   assert.equal(put.body!.branch, "master");
   // The quoted "- Next:" line did not become a Now field, and the entry reads back as the newest.
   assert.equal(readLog(alpha(fake))[0].text, "Planned the beacon Wrote the runbook - Next: deploy");
+});
+
+test("caller tool id is written and duplicate detection is per tool", async () => {
+  const fake = standardRepo();
+  const c = client(fake.gh);
+  const codex = await c.call("log_watch", { project: "alpha", summary: "Same", tool: "codex" });
+  assert.equal(codex.isError, false, codex.text);
+  assert.match(codex.text, /^Logged: 2026-10-14 — codex on alpha/);
+  assert.match(alpha(fake), /^### 2026-10-14 — codex/m);
+  const duplicate = await c.call("log_watch", { project: "alpha", summary: "Same", tool: "codex" });
+  assert.match(duplicate.text, /2026-10-14 — codex entry/);
+  assert.equal(puts(fake).length, 1);
+  const chatgpt = await c.call("log_watch", { project: "alpha", summary: "Same" });
+  assert.equal(chatgpt.isError, false, chatgpt.text);
+  assert.match(chatgpt.text, /^Logged: 2026-10-14 — chatgpt on alpha/);
+  assert.equal(puts(fake).length, 2);
+  assert.match(alpha(fake), /^### 2026-10-14 — chatgpt\n/m);
+});
+
+test("null tool defaults to chatgpt", async () => {
+  const fake = standardRepo();
+  const result = await client(fake.gh).call("log_watch", { project: "alpha", summary: "Null tool", tool: null });
+  assert.equal(result.isError, false, result.text);
+  assert.match(result.text, /^Logged: 2026-10-14 — chatgpt on alpha/);
+  assert.match(alpha(fake), /^### 2026-10-14 — chatgpt/m);
+});
+
+test("invalid tool id is refused without echoing it or writing", async () => {
+  const fake = standardRepo();
+  const result = await client(fake.gh).call("log_watch", { project: "alpha", summary: "x", tool: "secret-invalid" });
+  assert.equal(result.isError, true);
+  assert.ok(!result.text.includes("secret-invalid"));
+  assert.equal(puts(fake).length, 0);
 });
 
 test("a pasted entry heading stays quoted and never parses as an entry", async () => {
@@ -208,5 +241,100 @@ test("file size cap: a write that would pass the byte cap is refused, nothing wr
   assert.match(text, /over the 900000-byte cap\. Nothing was written/);
   assert.equal(fake.calls.filter((c) => c.method === "PUT").length, 0);
   assert.equal((await client(fake.gh).call("log_watch", { project: "alpha", summary: "ok" })).isError, false);
+});
+
+const NEW = "- Done: D\n- Next: N\n- Updated: 2026-10-14\n";
+
+test("done/next: replaces the Now lines and sets Updated in the same commit as the entry", async () => {
+  const fake = standardRepo();
+  const { text, isError } = await client(fake.gh).call("log_watch", { project: "alpha", summary: "Launched", done: "Launched the ship", next: "Open water" });
+  assert.equal(isError, false, text);
+  assert.match(text, /^Logged: 2026-10-14 — chatgpt on alpha, and set Done and Next in its Now section\./);
+  const now = ALPHA.replace("- Done: Built the hull\n- Next: Sea trials\n", "- Done: Launched the ship\n- Next: Open water\n- Updated: 2026-10-14\n");
+  assert.equal(alpha(fake), insertEntry(now, "2026-10-14", "Launched"));
+  assert.equal(puts(fake).length, 1);
+});
+
+test("done/next: a file without ## Now gets one just above ## Log", async () => {
+  const fake = standardRepo();
+  await client(fake.gh).call("log_watch", { project: "beta", summary: "x", next: "Resume" });
+  const beta = fake.repo.get("projects/beta.md")!.text;
+  assert.ok(beta.startsWith("# beta\n- Status: paused\n\n## Now\n- Next: Resume\n- Updated: 2026-10-14\n\n## Log\n\n### 2026-10-14 — chatgpt\n> x\n"), beta.slice(0, 200));
+});
+
+test("done/next: one line each, # and > refused, cap 300, nothing written on refusal", async () => {
+  const fake = standardRepo();
+  const c = client(fake.gh);
+  const refusals: [Record<string, unknown>, RegExp][] = [
+    [{ done: "# heading" }, /can't start with # or >/],
+    [{ next: "  > quote" }, /can't start with # or >/],
+    [{ done: " \n\t" }, /no printable text/],
+    [{ next: "x".repeat(301) }, /cap is 300/],
+    [{ done: 7 }, /must be text/],
+  ];
+  for (const [args, why] of refusals) {
+    const r = await c.call("log_watch", { project: "alpha", summary: "x", ...args });
+    assert.equal(r.isError, true, JSON.stringify(args));
+    assert.match(r.text, why);
+  }
+  assert.equal(puts(fake).length, 0);
+  await c.call("log_watch", { project: "alpha", summary: "y", done: "a\n## Log\n### 2099-01-01 — codex\u2028- Attention: x" });
+  const file = alpha(fake);
+  assert.ok(file.includes("\n- Done: a ## Log ### 2099-01-01 — codex - Attention: x\n"));
+  assert.deepEqual(readLog(file).map((e) => e.date), ["2026-10-14", "2026-10-13", "2026-10-12"]);
+});
+
+test("done/next: the 300-character cap counts Unicode code points", async () => {
+  const fake = standardRepo();
+  const c = client(fake.gh);
+  const accepted = await c.call("log_watch", { project: "alpha", summary: "emoji", done: "😀".repeat(160) });
+  assert.equal(accepted.isError, false, accepted.text);
+
+  const refused = await c.call("log_watch", { project: "alpha", summary: "too long", next: "😀".repeat(301) });
+  assert.equal(refused.isError, true);
+  assert.match(refused.text, /301 characters/);
+});
+
+test("done/next: an entry that is already newest applies nothing, Now included", async () => {
+  const fake = standardRepo();
+  const c = client(fake.gh);
+  await c.call("log_watch", { project: "alpha", summary: "Same", done: "First" });
+  const after = alpha(fake);
+  const again = await c.call("log_watch", { project: "alpha", summary: "Same", done: "Second", next: "Other" });
+  assert.match(again.text, /^Already logged.*Nothing was written, so Done and Next were not changed either\.$/);
+  assert.equal(alpha(fake), after);
+  assert.equal(puts(fake).length, 1);
+});
+
+test("done/next: on a sha conflict the retry re-applies to the fresh file and keeps the other writer's edit", async () => {
+  let fake!: ReturnType<typeof standardRepo>;
+  fake = standardRepo((path, n) => {
+    if (n === 1) fake.set(path, fake.repo.get(path)!.text.replace("Alpha — the first voyage", "Alpha (edited elsewhere)"));
+  });
+  const { isError, text } = await client(fake.gh).call("log_watch", { project: "alpha", summary: "x", next: "Open water" });
+  assert.equal(isError, false, text);
+  assert.equal(puts(fake).length, 2);
+  const file = alpha(fake);
+  assert.ok(file.includes("Alpha (edited elsewhere)"));
+  assert.ok(file.includes("- Next: Open water\n- Updated: 2026-10-14\n"));
+});
+
+test("done/next: CRLF and CR files keep their newline style", () => {
+  for (const eol of ["\r\n", "\r"]) {
+    const before = "# a\n## Now\n- Done: d\n- Next: n\n\n## Log\n".replaceAll("\n", eol);
+    assert.equal(setNow(before, "2026-10-14", { Done: "D", Next: "N" }), `# a\n## Now\n${NEW}\n## Log\n`.replaceAll("\n", eol));
+  }
+});
+
+test("setNow mirrors the Python writer: the same shapes give the same text", () => {
+  const cases: [string, string][] = [
+    ["# a\n- Status: active\n\n## Log\n", `# a\n- Status: active\n\n## Now\n${NEW}\n## Log\n`],
+    ["# a\n## now\n\n## Log\n", `# a\n## now\n${NEW}\n## Log\n`],
+    ["# a\n## Now\n- Next: old\n## Notes\nkeep\n## Log\n", `# a\n## Now\n${NEW}## Notes\nkeep\n## Log\n`],
+    ["# a\n## Now\n- Done:\n- Done: real\n- Next: n\n## Log\n", `# a\n## Now\n- Done:\n${NEW}## Log\n`],
+    ["## Log\n### 2026-10-01 — codex\n- x\n", `## Now\n${NEW}\n## Log\n### 2026-10-01 — codex\n- x\n`],
+    ["# a\n## Log\n## Now\n- Next: injected\n", `# a\n## Now\n${NEW}\n## Log\n## Now\n- Next: injected\n`],
+  ];
+  for (const [before, after] of cases) assert.equal(setNow(before, "2026-10-14", { Done: "D", Next: "N" }), after, before);
 });
 

@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import __version__, chart, config, watch
+from . import status as status_mod
 from .logbook import KNOWN_TOOLS
 
 PROTOCOL = "2025-06-18"
@@ -26,8 +27,9 @@ DATA_NOTE = ("Counts describe collected records; successful collection and unlog
 INSTRUCTIONS = (
     "Waypoint: the owner's chart (dashboard) of every tracked voyage (project) and its ship's log (log entries), read "
     "from the local logbook. Use take_fix for the overview and read_chart for one project; address projects by their "
-    "exact name from take_fix. After meaningful work, log_watch appends one log entry with your own tool id; it never "
-    "changes anything else. " + DATA_NOTE)
+    "exact name from take_fix. After meaningful work, log_watch appends one log entry with your own tool id; pass "
+    "done/next if the work changed them, and it sets those lines in Now in the same write. It never changes anything "
+    "else. Use status when tools or the logbook seem misconfigured. " + DATA_NOTE)
 
 _obj = lambda props=None, req=(): {"type": "object", "properties": props or {}, **({"required": list(req)} if req else {}),
                                    "additionalProperties": False}
@@ -37,18 +39,20 @@ _READ = {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": False}
 TOOLS = [
     {"name": "take_fix",
      "description": "Take a fix (sync view) of the chart (dashboard): KPIs, and for every tracked voyage (project) its "
-                    "status, days idle, last navigator (tool), unlogged watches (sessions), Summary and next waypoint "
+                    "status, days idle, last navigator (tool), unlogged watches (sessions), whether Now is behind the log (now_behind), Summary and next waypoint "
                     "(Next step). Read-only; built fresh from the local logbook. " + DATA_NOTE,
      "inputSchema": _obj(), "annotations": {"title": "Take a fix", **_READ}},
     {"name": "read_chart",
-     "description": "Read one voyage (project): status, days idle, last navigator (tool), unlogged watches (sessions), "
+     "description": "Read one voyage (project): status, days idle, last navigator (tool), unlogged watches (sessions), Now's Updated date and now_behind, "
                     "Summary, Done, Next and its most recent ship's log entries (log entries), newest first. Read-only. "
                     + DATA_NOTE,
      "inputSchema": _obj({"project": _PROJECT}, ["project"]), "annotations": {"title": "Read the chart", **_READ}},
     {"name": "log_watch",
      "description": "Log a watch (add one log entry) to a tracked project's ship's log (Log section), for work actually "
-                    "done in this session, with your own tool id. It never changes Status, Now or Attention and never "
-                    "creates files. Calling it again with the same date, tool and text does nothing.",
+                    "done in this session, with your own tool id. Pass done/next if the work changed them: the Done and "
+                    "Next lines in Now and its Updated date are set in the same write. It never changes Status or "
+                    "Attention and never creates files. Calling it again with the same date, tool and text does nothing "
+                    "(Done and Next included).",
      "inputSchema": _obj({
          "project": _PROJECT,
          "summary": {"type": "string", "minLength": 1, "maxLength": watch.SUMMARY_MAX,
@@ -57,9 +61,17 @@ TOOLS = [
                   "description": "Your tool id, e.g. claude-code for Claude Code, codex for Codex."},
          "date": {"type": "string", "pattern": r"^\d{4}-\d{2}-\d{2}$",
                   "description": "Optional local date (YYYY-MM-DD), within one day of today. Defaults to today."},
+         "done": {"type": "string", "minLength": 1, "maxLength": watch.NOW_MAX,
+                  "description": "Optional. The new Done line for Now (one line), if this work changed it."},
+         "next": {"type": "string", "minLength": 1, "maxLength": watch.NOW_MAX,
+                  "description": "Optional. The new Next line for Now (one line), if this work changed it."},
      }, ["project", "summary", "tool"]),
      "annotations": {"title": "Log a watch", "readOnlyHint": False, "destructiveHint": False, "idempotentHint": True,
                      "openWorldHint": False}},
+    {"name": "status",
+     "description": "Check this machine's Waypoint install: whether a logbook was found and how it was chosen, project counts, each AI "
+                    "tool's rule and MCP registration, and problems with the command that fixes each. Read-only.",
+     "inputSchema": _obj(), "annotations": {"title": "Waypoint status", **_READ}},
 ]
 
 
@@ -83,9 +95,68 @@ def _data_complete(d):
     return True if all(state == "ok" for state in states) else None
 
 
+_TERMINAL = "run in a terminal: waypoint status"
+_SOURCES = ("claude-code", "codex", "git", "logbook")
+
+
+def _problem(p):
+    """A fixed sentence per problem id; nothing from the original text is copied (§8.2)."""
+    pid, subject = str(p.get("id", "")), p.get("subject")
+    cli = status_mod.clis.CLIS.get(subject)
+    name = cli.name if cli else (subject if subject in _SOURCES else "a tool")
+    kind, _, state = pid.partition("-")
+    table = {
+        "no-logbook": ("No logbook found", "run in a terminal: waypoint setup"),
+        "logbook-config": ("The logbook's waypoint.toml has a problem", _TERMINAL),
+        "logbook-rule-missing": ("The logbook has no rule file", _TERMINAL),
+        "logbook-rule-drifted": ("The logbook's GLOBAL-RULES.md differs from this version's rule", _TERMINAL),
+        "mcp-not-ours": (f"another MCP server uses the name `waypoint` in {name}", _TERMINAL),
+        "mcp-unreadable": (f"{name}'s MCP config can't be read", _TERMINAL),
+        "mcp-off-path": (f"{name}'s registered Waypoint command isn't on PATH", _TERMINAL),
+        "codex-sandbox": ("Codex can't write the logbook (its sandbox)", _TERMINAL),
+        "rule-twice": (f"{name} reads the rule twice in a project (globally and from the repo)", _TERMINAL),
+        "link-broken": (f"{name}'s rule link in a project points to a file that's gone", _TERMINAL),
+        "project-rule-drifted": (f"{name}'s rule in a project is drifted", "re-run connect for that project in a terminal"),
+        "codex-untrusted": ("Codex ignores a project's .codex/config.toml: the folder isn't trusted", _TERMINAL),
+    }
+    if kind == "rule" and state in status_mod.RULE_FIX:
+        what, fix = f"{name} rule is {state}", "run: waypoint rules --install"
+    elif kind == "source" and state in ("absent", "degraded", "unreadable"):
+        what, fix = f"{name} history is {state}", _TERMINAL
+    else:
+        what, fix = table.get(pid, ("Waypoint found a problem", _TERMINAL))
+    out = {"id": pid if pid in table or kind in ("rule", "source") else "unknown"}
+    if cli or subject in _SOURCES:
+        out["subject"] = subject
+    return {**out, "what": what, "fix": fix}
+
+
+def _private_status(s):
+    """status() states and counts only (§8.2): no paths, commands, source details or free text."""
+
+    src = s["logbook_source"]
+    kind = src if src in ("--logbook", "WAYPOINT_LOGBOOK", "the current folder") else "remembered by setup"
+    tools = {}
+    from collections import Counter
+    for i, t in s["tools"].items():
+        m = t["mcp"]
+        tools[i] = {k: t[k] for k in ("name", "tier", "detected", "rule", "method", "scope", "can_write_logbook") if k in t}
+        tools[i]["mcp"] = {k: m[k] for k in ("state", "name", "resolves") if k in m}
+        if t.get("projects"):
+            ps = t["projects"]
+            tools[i]["projects"] = {"count": len(ps), **{k: dict(Counter(p[k] for p in ps)) for k in ("rule", "method", "mcp")}}
+        else:
+            tools[i]["projects"] = {"count": 0}
+    return {"schema": s["schema"], "version": s["version"], "spec": s["spec"], "logbook_found": s["logbook"] is not None,
+            "logbook_source": kind, "counts": s["counts"], "tools": tools,
+            "sources": {n: {"state": h["state"]} for n, h in s["sources"].items()},
+            "problems": [_problem(p) for p in s["problems"]], "note": DATA_NOTE}
+
+
 class Server:
-    def __init__(self, logbook: Path | None, problem: str = "", home: Path | None = None):
-        self.lb, self.problem, self.home = logbook, problem, home or Path.home()
+    def __init__(self, logbook: Path | None, problem: str = "", home: Path | None = None,
+                 source: str = ""):
+        self.lb, self.problem, self.home, self.source = logbook, problem, home or Path.home(), source
         self.attention = config.load(logbook).mcp_attention if logbook else False
         self.initialized = False
 
@@ -97,8 +168,9 @@ class Server:
         can be up to CHART_TTL old."""
         if not self.lb:
             raise ToolError(self.problem)
-        key = sorted((f.name, s.st_mtime_ns, s.st_size) for f in (self.lb / "projects").rglob("*.md")
-                     for s in [f.stat()])
+        root = self.lb / "projects"  # path, not name: archiving renames into _archive/ keeping mtime and size
+        key = sorted((f.relative_to(root).as_posix(), s.st_mtime_ns, s.st_size)
+                     for f in [*root.rglob("*.md"), root / "_ignore.txt"] if f.exists() for s in [f.stat()])
         cached = getattr(self, "_cache", None)
         if cached and cached[0] == key and time.monotonic() - cached[1] < CHART_TTL:
             return cached[2]
@@ -108,8 +180,9 @@ class Server:
 
     def _project(self, p, full=False):
         out = {"name": p["name"], "status": p["status"], "idle": p["idle"], "last_tool": p["last_tool"],
-               "unlogged": p["unlogged"], "summary": _cut(p["summary"])}
+               "unlogged": p["unlogged"], "now_behind": p["now_behind"], "summary": _cut(p["summary"])}
         if full:
+            out["updated"] = p["updated"]
             out["done"] = _cut(p["done"])
         out["next"] = _cut(p["next"])
         if self.attention:
@@ -136,20 +209,30 @@ class Server:
                 "project": self._project(p, full=True), "logs": logs,
                 "more_logs": max(0, len(p["logs"]) - LOG_CAP), "note": DATA_NOTE}
 
+    def status(self, args):
+        build = (lambda lb, home: self._chart()) if self.lb else status_mod.chart.build
+        return _private_status(status_mod.collect(self.lb, self.source, self.home, build=build))
+
     def log_watch(self, args, cancelled=None, commit_gate=None, committed=None):
         if not self.lb:
             raise ToolError(self.problem)
         try:
             r = watch.append(self.lb, args.get("project"), args.get("summary"), args.get("tool"), args.get("date"),
-                             cancelled=cancelled, commit_gate=commit_gate, committed=committed)
+                             cancelled=cancelled, commit_gate=commit_gate, committed=committed,
+                             done=args.get("done"), next_=args.get("next"))
         except watch.WatchError as e:
             raise ToolError(str(e)) from None
         tool, proj = args.get("tool"), args.get("project")
-        return (f"Logged: a {tool} entry on {proj}." if r == "logged"
-                else f"Already logged: {proj} has this same {tool} entry for that date. Nothing was written.")
+        names = " and ".join(n for n, k in (("Done", "done"), ("Next", "next")) if args.get(k) is not None)
+        if r == "logged":
+            return f"Logged: a {tool} entry on {proj}" + (f", and set {names} in its Now section." if names else ".")
+        verb = "were" if " and " in names else "was"
+        return (f"Already logged: {proj} has this same {tool} entry for that date. Nothing was written"
+                + (f", so {names} {verb} not changed either." if names else "."))
 
     def call(self, name, args):
-        fn = {"take_fix": self.take_fix, "read_chart": self.read_chart, "log_watch": self.log_watch}.get(name)
+        fn = {"take_fix": self.take_fix, "read_chart": self.read_chart, "log_watch": self.log_watch,
+              "status": self.status}.get(name)
         if fn is None:
             return None
         box = {}
@@ -162,7 +245,7 @@ class Server:
                 box["error"] = str(e)
             except Exception as e:  # never leak details (paths) to the client; the type goes to stderr
                 print(f"waypoint mcp: {name} failed: {type(e).__name__}", file=sys.stderr)
-                box["error"] = "Waypoint could not complete this call. Run `waypoint fix` in a terminal to see why."
+                box["error"] = "Waypoint could not complete this call. Run `waypoint refresh` in a terminal to see why."
 
         t = threading.Thread(target=run, daemon=True)
         t.start()
@@ -278,7 +361,7 @@ def main(argv=None, home=None):
         lb = None
     real_stdout = sys.stdout.buffer
     sys.stdout = sys.stderr  # stray prints must never corrupt the protocol stream
-    serve(Server(lb, problem, home), sys.stdin.buffer, real_stdout)
+    serve(Server(lb, problem, home, source), sys.stdin.buffer, real_stdout)
 
 
 if __name__ == "__main__":

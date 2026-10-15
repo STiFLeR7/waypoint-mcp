@@ -1,9 +1,15 @@
 """waypoint: take a fix across every project and every AI tool.
 
+  waypoint                         the screen: manage projects and AI tools (setup when there's no logbook yet)
   waypoint setup                   guided: logbook, roots, and the rule for the AI CLIs it finds
   waypoint add <folder>            chart a voyage: create the project's file
-  waypoint fix                     take a fix: harvest the facts, redraw the chart (DASHBOARD.md, dashboard.json, chart.html)
-  waypoint connect <cli>           wire one AI CLI: its rule and the local MCP server (or print its config)
+  waypoint refresh                 refresh the dashboard (DASHBOARD.md, dashboard.json, chart.html); alias: fix
+  waypoint status                  everything at a glance: logbook, projects, AI tools, problems
+  waypoint archive <project>       hide a finished project, keep its log (restore brings it back)
+  waypoint remove <project>        stop tracking a project (deletes its file)
+  waypoint ignore <folder>         not a project: stop showing it as untracked (--undo)
+  waypoint connect <cli>           wire one AI CLI: its rule and the local MCP server (--project <repo>: that repo only)
+  waypoint disconnect <cli>        remove only what Waypoint added for one AI CLI (--project <repo>: that repo only)
   waypoint rules [--install|--uninstall]   show, check, install or remove the global rule
   waypoint init <dir>              scaffold a logbook (setup does this for you)
 """
@@ -17,7 +23,7 @@ import webbrowser
 from importlib import resources
 from pathlib import Path
 
-from . import __version__, chart, clis, config, logbook, rules
+from . import __version__, chart, clis, config, logbook, manage, project, rules
 from .paths import real
 
 ROOT_HINTS = ("code", "src", "projects", "dev", "repos", "workspace", "Documents/GitHub", "source/repos")
@@ -117,7 +123,7 @@ def _print_init(created, kept, notes):
 def cmd_init(a):
     lb = Path(a.dir).expanduser().resolve()
     _print_init(*init_logbook(lb, refresh_rules=a.refresh_rules))
-    print(f"Logbook ready at {lb}. Next: `waypoint add <folder>` per project, then `waypoint fix --logbook {lb}`.")
+    print(f"Logbook ready at {lb}. Next: `waypoint add <folder>` per project, then `waypoint refresh --logbook {lb}`.")
 
 
 # ---- add ----
@@ -201,7 +207,84 @@ def cmd_add(a):
     print(f"Charted a new voyage (project): {target}")
     for w in warnings:
         print(f"  ! {w}")
-    print("Fill in its Summary and Next in that file (or let your AI tool do it), then take a fix: waypoint fix")
+    print("Fill in its Summary and Next in that file (or let your AI tool do it), then refresh: waypoint refresh")
+
+
+# ---- archive / restore / remove / ignore ----
+
+def _manage(fn, *args):
+    try:
+        return fn(*args)
+    except ValueError as e:
+        sys.exit(f"waypoint: {e}.")
+    except OSError as e:
+        what = {"archive": "archive it", "restore": "restore it", "remove": "remove it", "ignore": "update _ignore.txt"}
+        sys.exit(f"waypoint: couldn't {what.get(fn.__name__, 'finish')} ({type(e).__name__}: {e}); nothing else changed. "
+                 "Close any program using the file and try again.")
+
+
+def cmd_archive(a):
+    lb = _logbook(a.logbook)
+    p = _manage(manage.find, lb, a.project)
+    print(f"Archive {p['name']}: move {p['file']} to projects/_archive/. Its log is kept; "
+          "it leaves the dashboard's main list and shows under Archived.")
+    if not confirm("Archive it?", a.yes):
+        sys.exit("Cancelled; nothing changed.")
+    dest = _manage(manage.archive, lb, a.project)
+    print(f"Archived: {dest}\nRefresh the dashboard: waypoint refresh")
+
+
+def cmd_restore(a):
+    lb = _logbook(a.logbook)
+    p = _manage(manage.find, lb, a.project, True)
+    print(f"Restore {p['name']}: move {p['file']} back to projects/.")
+    if not confirm("Restore it?", a.yes):
+        sys.exit("Cancelled; nothing changed.")
+    dest = _manage(manage.restore, lb, a.project)
+    print(f"Restored: {dest}\nRefresh the dashboard: waypoint refresh")
+
+
+def cmd_remove(a):
+    lb = _logbook(a.logbook)
+    p = _manage(manage.find, lb, a.project)
+    n = len(p["logs"])
+    print(f"Remove {p['name']}: delete {p['file']} ({_n(n, 'log entry', 'log entries')}). "
+          "If the logbook is a git repo, its history keeps the file.")
+    if a.ignore and p["path"]:
+        print(f"  and ignore its folder {p['path']}, so it stops showing as untracked")
+    if n:
+        print(f"  ! It has a log. To keep it but hide it, archive it instead: waypoint archive {p['name']}")
+    if not confirm("Delete it?", a.yes):
+        sys.exit("Cancelled; nothing changed.")
+    r = _manage(manage.remove, lb, a.project, a.ignore)
+    print(f"Removed: {r['file']}" + (f"; ignoring {r['ignored']}" if r["ignored"] else "")
+          + "\nRefresh the dashboard: waypoint refresh")
+
+
+def cmd_ignore(a):
+    lb = _logbook(a.logbook)
+    folder = Path(a.folder).expanduser().resolve()
+    if not a.undo and (why := manage.ignore_problem(lb, folder)):
+        sys.exit(f"waypoint: {why}.")
+    verb = "Stop ignoring" if a.undo else "Ignore"
+    print(f"{verb} {folder}" + ("" if a.undo else ": it isn't a project, so it won't show as untracked."))
+    if not confirm(f"{verb} it?", a.yes):
+        sys.exit("Cancelled; nothing changed.")
+    changed = _manage(manage.ignore, lb, folder, a.undo)
+    if a.undo:
+        print(f"No longer ignoring {folder}." if changed else f"{folder} wasn't in projects/_ignore.txt.")
+    else:
+        print(f"Ignoring {folder}." if changed else f"{folder} was already ignored.")
+    print("Refresh the dashboard: waypoint refresh")
+
+
+def cmd_status(a):
+    from . import status
+    lb, source = config.find_logbook(a.logbook)
+    checked = lb.resolve()
+    lb = checked if (lb / "projects").is_dir() else None
+    s = status.collect(lb, source, _home(a), checked=checked)
+    print(json.dumps(s, ensure_ascii=False, indent=1) if a.json else status.render_text(s))
 
 
 # ---- fix ----
@@ -218,14 +301,12 @@ def cmd_fix(a):
     k = d["kpi"]
     if not k["tracked"]:
         verb = "is" if k["untracked"] == 1 else "are"
-        print(f"No voyages (projects) charted yet; {_n(k['untracked'], 'folder')} with recent AI activity {verb} uncharted"
-              " (untracked). Chart one: waypoint add <folder>")
+        print(f"Dashboard refreshed. No projects tracked yet; {_n(k['untracked'], 'folder')} with recent AI activity "
+              f"{verb} untracked. Track one: waypoint add <folder>")
     else:
-        voyages = _n(k["tracked"], "voyage") + (" (project)" if k["tracked"] == 1 else " (projects)")
-        hazards = _n(k["attention"], "hazard") + (" (attention item)" if k["attention"] == 1 else " (attention items)")
-        print(f"Fix taken (sync): {voyages}, {k['velocity']} underway (active) this week, {hazards}, "
-              f"{k['unlogged']} with unlogged watches (sessions), {k['stale']} adrift (stale), "
-              f"{k['untracked']} uncharted (untracked folders).")
+        print(f"Dashboard refreshed: {_n(k['tracked'], 'project')}, {k['velocity']} active this week, "
+              f"{_n(k['attention'], 'attention item')}, {k['unlogged']} with unlogged sessions, {k['stale']} stale, "
+              f"{_n(k['untracked'], 'untracked folder')}.")
     page = (lb / "chart.html").resolve()
     print(f"Chart (dashboard) for your browser: {page}")
     if a.open and not webbrowser.open(page.as_uri()):
@@ -276,7 +357,8 @@ STATE_HELP = {
 def show_plan(changes):
     """Print every target and its exact change; returns the changes that would write."""
     for c in changes:
-        print(f"  {c.action:<9} {c.target}" + (f"  ({c.note})" if c.note else ""))
+        action = "unlink" if c.action == "link" and c.new is None else c.action
+        print(f"  {action:<9} {c.target}" + (f"  ({c.note})" if c.note else ""))
     writes = [c for c in changes if c.action in rules.WRITES]
     for c in writes:
         print()
@@ -304,7 +386,8 @@ def run_plan(changes, yes, verb="Apply these changes?"):
 def _report(results):
     failed = False
     for c, err in results:
-        print(f"  {'✓' if not err else '✗'} {c.action} {c.target}" + (f": {err}" if err else ""))
+        action = "unlink" if c.action == "link" and c.new is None else c.action
+        print(f"  {'✓' if not err else '✗'} {action} {c.target}" + (f": {err}" if err else ""))
         failed = failed or bool(err)
     if failed:
         print("Some changes didn't happen; the others did. Fix the cause and run the command again.")
@@ -315,41 +398,83 @@ def cmd_rules(a):
     lb = _logbook(a.logbook)
     home = _home(a)
     if a.uninstall:
-        sys.exit(0 if run_plan(rules.plan_uninstall(home), a.yes, "Remove Waypoint's rule from these files?") else 1)
+        plan = rules.plan_uninstall(home) + project.plan_uninstall_all(lb, home)
+        sys.exit(0 if run_plan(plan, a.yes, "Remove Waypoint's rule from these files?") else 1)
     tools = [*rules.TOOLS, *(t for t in clis.detected() if t not in rules.TOOLS)]
     if a.install:
-        ok = run_plan(rules.plan_install(home, lb, codex_override=a.codex_override, tools=tools), a.yes)
+        plan = rules.plan_install(home, lb, codex_override=a.codex_override, tools=tools) + project.plan_refresh(lb)
+        ok = run_plan(plan, a.yes)
         sys.exit(0 if ok else 1)
     print(rules.render(lb))
     for target, state in rules.check(home, lb, tools).items():
         print(f"{target}: {state}" + ("" if target == "logbook" else f" ({STATE_HELP.get(state, '')})"))
 
 
-# ---- connect ----
+# ---- connect / disconnect ----
+
+def _repos(paths):
+    out, seen = [], set()
+    for p in paths or []:
+        r = Path(p).expanduser().resolve()
+        if not r.is_dir():
+            sys.exit(f"waypoint: {r} is not a folder.")
+        key = real(str(r))
+        if key not in seen:
+            seen.add(key)
+            out.append(r)
+    return out
 
 def cmd_connect(a):
     c = clis.CLIS[a.cli]
     if c.tier == "snippet":
+        if a.project:
+            sys.exit(f"waypoint: {c.name} isn't wired automatically, globally or per project; "
+                     f"`waypoint connect {c.id}` prints its config.")
         lb, _ = config.find_logbook(a.logbook)
         print(clis.snippet_text(c, lb.resolve()))
         return
-    lb = _logbook(a.logbook)
+    if (a.copy or a.allow_tracked) and not a.project:
+        sys.exit("waypoint: --copy and --allow-tracked work with --project only.")
+    lb, home, repos = _logbook(a.logbook), _home(a), _repos(a.project)
     served, source = config.find_logbook(None)  # what `waypoint mcp` (no flags) will open
-    if not a.no_mcp and rules._real_home(_home(a)) and served.resolve() != lb:
+    if not a.no_mcp and rules._real_home(home) and served.resolve() != lb:
         sys.exit(f"waypoint: the MCP server would open {served.resolve()} (from {source}), not {lb}. "
                  f"Make {lb} the default first (waypoint setup --logbook {lb}), or pass --no-mcp.")
-    print(f"Wiring {c.name} ({c.tier}): the rule" + ("" if a.no_mcp else " and the local MCP server (waypoint mcp)") + ".\n")
-    plan = rules.plan_install(_home(a), lb, tools=(c.id,), mcp=not a.no_mcp)
+    where = ("in " + ", ".join(r.name for r in repos)) if repos else "for every project (global)"
+    print(f"Wiring {c.name} ({c.tier}) {where}: the rule" + ("" if a.no_mcp else " and the local MCP server (waypoint mcp)")
+          + ".\n")
+    if repos:
+        plan = [ch for r in repos for ch in project.plan_connect(
+            c.id, r, lb, home, mcp=not a.no_mcp, copy=a.copy, allow_tracked=a.allow_tracked,
+            writable_root=not a.no_writable_root)]
+    else:
+        plan = rules.plan_install(home, lb, tools=(c.id,), mcp=not a.no_mcp, writable_root=not a.no_writable_root)
     ok = run_plan(plan, a.yes)
     if ok and not a.no_mcp:
         print(f"\nIn a new {c.name} session, its tools take_fix, read_chart and log_watch (tool id {c.id}) are aboard.")
     sys.exit(0 if ok else 1)
 
 
+def cmd_disconnect(a):
+    c = clis.CLIS[a.cli]
+    if c.tier == "snippet":
+        sys.exit(f"waypoint: Waypoint writes nothing for {c.name}, so there's nothing to disconnect.")
+    home, repos = _home(a), _repos(a.project)
+    where = ", ".join(r.name for r in repos) if repos else "your home config (global)"
+    print(f"Disconnecting {c.name} from {where}: only what Waypoint added.\n")
+    plan = [ch for r in repos for ch in project.plan_disconnect(r, home, tools=(c.id,), mcp=not a.no_mcp)] if repos \
+        else rules.plan_uninstall(home, mcp=not a.no_mcp, tools=(c.id,))
+    sys.exit(0 if run_plan(plan, a.yes, f"Remove these from {c.name}'s setup?") else 1)
+
+
 # ---- setup ----
 
 def cmd_setup(a):
     home = _home(a)
+    from . import tui
+    scripted = any((a.yes, a.logbook, a.root, a.tool, a.no_mcp, a.no_writable_root, a.git, a.allow_broad_root))
+    if not scripted and tui.available() and tui.interactive():
+        sys.exit(tui.run_wizard(home))  # the screen; flags keep today's prompts, so scripts never see it
     if a.yes and not (a.logbook and a.root):
         sys.exit("waypoint: setup --yes needs --logbook <dir> and at least one --root <dir>.")
     print("Fitting out Waypoint: one logbook (data folder) that every AI tool logs to.\n")
@@ -385,7 +510,7 @@ def cmd_setup(a):
     created, kept, notes = init_logbook(lb, roots=roots, dry_run=True)
     real_home = rules._real_home(home)
     remember = config.remember_plan(lb) if real_home else None  # --home: leave the real user config alone
-    plan = rules.plan_install(home, lb, tools=tools, mcp=not a.no_mcp) if tools else []
+    plan = rules.plan_install(home, lb, tools=tools, mcp=not a.no_mcp, writable_root=not a.no_writable_root) if tools else []
     print(f"\nLogbook: {lb}")
     _print_init(created, kept, notes)
     if make_git:
@@ -414,17 +539,42 @@ def cmd_setup(a):
             config.remember_logbook(lb)
         if writes and not _report(rules.apply(writes)):
             sys.exit(1)
-    if "codex" in tools:
-        print(f"\nCodex runs in a sandbox. To let it write the logbook, add this to {rules.codex_dir(home) / 'config.toml'}"
-              f" yourself (Waypoint never widens a tool's permissions):\n  [sandbox_workspace_write]\n"
-              f"  writable_roots = [{json.dumps(str(lb))}]")
     print("\nReady to sail. Next:\n  waypoint add <project folder>    chart a voyage (project)\n"
-          "  waypoint fix                     take a fix: the chart (dashboard)")
+          "  waypoint refresh                 refresh the dashboard")
+
+
+MENU = (("Refresh dashboard", "refresh"), ("Status", "status"), ("Setup", "setup"))
+
+
+def cmd_menu(a):
+    """`waypoint` alone: the manager screen (setup when no logbook is known yet); without the tui extra, a numbered
+    menu of the same plain commands; not on a terminal, the command list."""
+    from . import tui
+    lb, source = config.find_logbook(None)
+    known = (lb / "projects").is_dir()
+    if not tui.interactive():
+        print(__doc__.strip())
+        return
+    if tui.available():
+        home = _home(a)
+        sys.exit(tui.run_manager(lb.resolve(), source, home) if known else tui.run_wizard(home))
+    print(tui.INSTALL_HINT + "\n")
+    if not known:
+        print("No logbook yet, so: waypoint setup\n")
+        return main(["setup"])
+    for i, (label, _) in enumerate(MENU, 1):
+        print(f"  {i}. {label}")
+    answer = ask("Choose a number (Enter quits)")
+    if answer in {str(i) for i in range(1, len(MENU) + 1)}:
+        return main([MENU[int(answer) - 1][1]])
+    if answer:
+        print("waypoint: choose 1, 2 or 3 (Enter quits).")
+        sys.exit(2)
 
 
 def main(argv=None):
     p = argparse.ArgumentParser(prog="waypoint", description="Every voyage (project), every navigator (AI tool), one chart.")
-    p.add_argument("--version", action="version", version=f"waypoint {__version__} (logbook spec v1.1)")
+    p.add_argument("--version", action="version", version=f"waypoint {__version__} (logbook spec v1.2)")
     sub = p.add_subparsers(dest="cmd", required=True)
     lb_help = "logbook folder (default: WAYPOINT_LOGBOOK, then the one `setup` remembered, then the current folder)"
 
@@ -434,6 +584,7 @@ def main(argv=None):
     s.add_argument("--tool", action="append", choices=[c.id for c in clis.WIRED],
                    help="wire this AI CLI (repeatable; default: those on PATH)")
     s.add_argument("--no-mcp", action="store_true", help="install the rule only; don't register the local MCP server")
+    s.add_argument("--no-writable-root", action="store_true", help="Codex: don't add the logbook to its sandbox's writable_roots")
     s.add_argument("--git", action="store_true", help="make the logbook a git repo (asked when interactive)")
     s.add_argument("--allow-broad-root", action="store_true", help="accept a home folder or drive root as a root")
     s.add_argument("--yes", action="store_true", help="don't ask; needs --logbook and --root")
@@ -446,20 +597,64 @@ def main(argv=None):
     ad.add_argument("--logbook", help=lb_help)
     ad.set_defaults(func=cmd_add)
 
-    f = sub.add_parser("fix", help="take a fix: harvest the facts, redraw the chart")
+    for name, fn, text in (("archive", cmd_archive, "archive a project: keep its log, hide it from the main list"),
+                           ("restore", cmd_restore, "bring an archived project back")):
+        x = sub.add_parser(name, help=text)
+        x.add_argument("project", help="project name, as the dashboard shows it")
+        x.add_argument("--logbook", help=lb_help)
+        x.add_argument("--yes", action="store_true", help="don't ask for confirmation")
+        x.set_defaults(func=fn)
+
+    rm = sub.add_parser("remove", help="stop tracking a project: delete its file (archive keeps it instead)")
+    rm.add_argument("project", help="project name, as the dashboard shows it")
+    rm.add_argument("--ignore", action="store_true", help="also stop showing its folder as untracked")
+    rm.add_argument("--logbook", help=lb_help)
+    rm.add_argument("--yes", action="store_true", help="don't ask for confirmation")
+    rm.set_defaults(func=cmd_remove)
+
+    ig = sub.add_parser("ignore", help="mark a folder as not a project, so it stops showing as untracked")
+    ig.add_argument("folder", help="the folder")
+    ig.add_argument("--undo", action="store_true", help="remove it from the ignore list")
+    ig.add_argument("--logbook", help=lb_help)
+    ig.add_argument("--yes", action="store_true", help="don't ask for confirmation")
+    ig.set_defaults(func=cmd_ignore)
+
+    f = sub.add_parser("refresh", aliases=["fix"], help="refresh the dashboard: read AI activity and git, redraw "
+                                                         "DASHBOARD.md, dashboard.json and chart.html (alias: fix)")
     f.add_argument("--logbook", help=lb_help)
     f.add_argument("--push", action="store_true", help="git pull first, then commit and push the logbook")
     f.add_argument("--open", action="store_true", help="open chart.html in your browser")
     f.add_argument("--home", help=argparse.SUPPRESS)
     f.set_defaults(func=cmd_fix)
 
+    st = sub.add_parser("status", help="show the whole install: logbook, projects, AI tools, problems and fixes")
+    st.add_argument("--logbook", help=lb_help)
+    st.add_argument("--json", action="store_true", help="machine-readable output")
+    st.add_argument("--home", help=argparse.SUPPRESS)
+    st.set_defaults(func=cmd_status)
+
     c = sub.add_parser("connect", help="wire one AI CLI (rule + local MCP server), or print config for the others")
     c.add_argument("cli", choices=list(clis.CLIS), help="the AI CLI, by its tool id")
     c.add_argument("--logbook", help=lb_help)
     c.add_argument("--no-mcp", action="store_true", help="install the rule only")
+    c.add_argument("--no-writable-root", action="store_true", help="Codex: don't add the logbook to its sandbox's writable_roots")
+    c.add_argument("--project", action="append", default=[], metavar="REPO",
+                   help="wire this repo only (repeatable): the rule in the repo and an MCP entry scoped to it")
+    c.add_argument("--copy", action="store_true",
+                   help="with --project: a copied block, never a link (turns Waypoint's link into a file you can edit)")
+    c.add_argument("--allow-tracked", action="store_true",
+                   help="with --project: also edit a file git tracks (Waypoint's block will show in its diff)")
     c.add_argument("--yes", action="store_true", help="don't ask for confirmation")
     c.add_argument("--home", help=argparse.SUPPRESS)
     c.set_defaults(func=cmd_connect)
+
+    dc = sub.add_parser("disconnect", help="remove only what Waypoint added for one AI CLI (globally, or per --project)")
+    dc.add_argument("cli", choices=list(clis.CLIS), help="the AI CLI, by its tool id")
+    dc.add_argument("--project", action="append", default=[], metavar="REPO", help="this repo only (repeatable)")
+    dc.add_argument("--no-mcp", action="store_true", help="leave the MCP entry")
+    dc.add_argument("--yes", action="store_true", help="don't ask for confirmation")
+    dc.add_argument("--home", help=argparse.SUPPRESS)
+    dc.set_defaults(func=cmd_disconnect)
 
     r = sub.add_parser("rules", help="show, check, install or remove the global rule")
     r.add_argument("--logbook", help=lb_help)
@@ -483,7 +678,7 @@ def main(argv=None):
     if argv[:1] == ["mcp"]:  # its own parser: the server owns stdout, so no extra output here
         from . import mcp
         return mcp.main(argv[1:])
-    a = p.parse_args(argv)
+    a = p.parse_args(argv) if argv else argparse.Namespace(func=cmd_menu, home=None)  # `waypoint` alone
     if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
         sys.stdout.reconfigure(encoding="utf-8")  # Windows consoles: keep ✓ and — printable
     try:

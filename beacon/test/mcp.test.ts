@@ -1,6 +1,7 @@
 // Protocol cases ported from port/tests/mcp.spec.ts, plus the §8 privacy allowlist and name checks.
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { handleMcp } from "../src/mcp.ts";
 import { badOrigin } from "../src/auth.ts";
 import { SENTINELS, client, dashboard, project, standardRepo } from "./fakes.ts";
@@ -77,6 +78,19 @@ describe("mcp protocol", () => {
       { title: undefined, readOnlyHint: false, destructiveHint: false, openWorldHint: false },
     );
     assert.deepEqual(by.log_watch.inputSchema.required, ["project", "summary"]);
+    assert.deepEqual(Object.keys(by.log_watch.inputSchema.properties).sort(), ["date", "done", "next", "project", "summary", "tool"]);
+    assert.equal(by.log_watch.inputSchema.properties.tool.description, "Your own tool id: codex for Codex, claude-code for Claude Code, chatgpt for ChatGPT. Defaults to chatgpt.");
+    assert.equal(by.log_watch.inputSchema.properties.done.maxLength, 300);
+    assert.equal(by.log_watch.inputSchema.properties.next.maxLength, 300);
+  });
+
+  test("log_watch tool ids match the local server's KNOWN_TOOLS", async () => {
+    const j = await (await rpc({ jsonrpc: "2.0", id: 2, method: "tools/list" })).json();
+    const tool = j.result.tools.find((t: { name: string }) => t.name === "log_watch");
+    const local = readFileSync("../waypoint/logbook.py", "utf8").match(/KNOWN_TOOLS = \(([^)]*)\)/s)?.[1];
+    assert.ok(local, "KNOWN_TOOLS declaration in waypoint/logbook.py");
+    const known = [...local.matchAll(/"([a-z][a-z0-9-]+)"/g)].map((m) => m[1]);
+    assert.deepEqual(tool.inputSchema.properties.tool.enum, known);
   });
 
   test("malformed traffic yields JSON-RPC errors, never a throw or 500", async () => {
@@ -173,6 +187,19 @@ describe("mcp protocol", () => {
 });
 
 describe("privacy allowlist (§8)", () => {
+  test("now_behind and updated pass through from a v1.2 chart; an older chart gives null", async () => {
+    const dash = dashboard([project("alpha", { updated: "2026-10-01", now_behind: true }), project("beta")]);
+    (dash.kpi as Record<string, unknown>).behind = 1;
+    const { call } = client(standardRepo(undefined, dash).gh);
+    const fix = JSON.parse((await call("take_fix")).text);
+    assert.equal(fix.kpi.behind, 1);
+    assert.deepEqual(fix.projects.map((p: { now_behind: unknown }) => p.now_behind), [true, null]);
+    const one = JSON.parse((await call("read_chart", { project: "alpha" })).text).project;
+    assert.deepEqual([one.updated, one.now_behind], ["2026-10-01", true]);
+    const old = JSON.parse((await client(standardRepo().gh).call("take_fix")).text);
+    assert.equal(old.kpi.behind, null);
+  });
+
   test("take_fix returns KPIs and allowed project fields only", async () => {
     const { call } = client(standardRepo().gh);
     const { text, isError } = await call("take_fix");
@@ -181,13 +208,13 @@ describe("privacy allowlist (§8)", () => {
     const j = JSON.parse(text);
     assert.deepEqual(Object.keys(j).sort(), ["chart_generated", "data_complete", "kpi", "projects"]);
     assert.equal(j.data_complete, false); // fixture contains a degraded collector
-    assert.deepEqual(Object.keys(j.kpi).sort(), ["attention", "stale", "tracked", "unlogged", "untracked", "velocity"]);
+    assert.deepEqual(Object.keys(j.kpi).sort(), ["attention", "behind", "stale", "tracked", "unlogged", "untracked", "velocity"]);
     assert.equal(j.chart_generated, "2025-10-14T08:20:00.000Z");
     assert.deepEqual(j.projects.map((p: { name: string }) => p.name), ["alpha", "beta"]);
     for (const p of j.projects) {
-      assert.deepEqual(Object.keys(p).sort(), ["idle", "last_tool", "name", "next", "status", "summary", "unlogged"]);
+      assert.deepEqual(Object.keys(p).sort(), ["idle", "last_tool", "name", "next", "now_behind", "status", "summary", "unlogged"]);
     }
-    assert.deepEqual(j.projects[1], { name: "beta", status: "paused", idle: 40, last_tool: "claude-code", unlogged: 2, summary: "beta summary", next: "beta next" });
+    assert.deepEqual(j.projects[1], { name: "beta", status: "paused", idle: 40, last_tool: "claude-code", unlogged: 2, now_behind: null, summary: "beta summary", next: "beta next" });
   });
 
   test("read_chart returns one project's allowed fields and its log, never the header", async () => {
@@ -199,7 +226,7 @@ describe("privacy allowlist (§8)", () => {
     assert.deepEqual(Object.keys(j).sort(), ["chart_generated", "data_complete", "log_source", "logs", "project"]);
     assert.equal(j.data_complete, false);
     assert.equal(j.log_source, "current project file");
-    assert.deepEqual(Object.keys(j.project).sort(), ["done", "idle", "last_tool", "name", "next", "status", "summary", "unlogged"]);
+    assert.deepEqual(Object.keys(j.project).sort(), ["done", "idle", "last_tool", "name", "next", "now_behind", "status", "summary", "unlogged", "updated"]);
     assert.deepEqual(j.logs, [
       { date: "2026-10-13", tool: "claude-code", text: "Newer entry" },
       { date: "2026-10-12", tool: "codex", text: "Older entry — with an em dash" },
@@ -309,12 +336,12 @@ describe("project names", () => {
 describe("value validation (§8): forbidden data nested in allowed fields", () => {
   const nested = { attention: ["ATTN-SECRET"], path: "D:\SECRET-PATH", sources: { codex: { detail: "SOURCE-SECRET" } }, feed: [{ text: "FEED-SECRET" }] };
   const evil = dashboard([
-    project("alpha", { summary: nested, next: [nested], done: { toString: "ATTN-SECRET" }, status: nested, idle: nested, unlogged: "FEED-SECRET", last_tool: 7 }),
+    project("alpha", { summary: nested, next: [nested], done: { toString: "ATTN-SECRET" }, status: nested, idle: nested, unlogged: "FEED-SECRET", last_tool: 7, now_behind: "ATTN-SECRET", updated: nested }),
     project("beta", { idle: Infinity, summary: "x".repeat(5000) }),
     { name: nested, file: "projects/x.md" }, // unaddressable: dropped
     "UNTRACKED-SECRET",
   ] as never);
-  (evil as Record<string, unknown>).kpi = { tracked: nested, attention: "ATTN-SECRET", velocity: 3, stale: NaN, untracked: [1], unlogged: null };
+  (evil as Record<string, unknown>).kpi = { tracked: nested, attention: "ATTN-SECRET", velocity: 3, stale: NaN, untracked: [1], unlogged: null, behind: "ATTN-SECRET" };
   (evil as Record<string, unknown>).generated = nested;
 
   test("take_fix nulls every non-conforming value", async () => {
@@ -323,12 +350,12 @@ describe("value validation (§8): forbidden data nested in allowed fields", () =
     noLeak(text);
     const j = JSON.parse(text);
     assert.equal(j.chart_generated, null);
-    assert.deepEqual(j.kpi, { tracked: null, attention: null, velocity: 3, stale: null, untracked: null, unlogged: null });
+    assert.deepEqual(j.kpi, { tracked: null, attention: null, velocity: 3, stale: null, untracked: null, unlogged: null, behind: null });
     assert.deepEqual(j.projects.map((p: { name: string }) => p.name), ["alpha", "beta"]);
-    assert.deepEqual(j.projects[0], { name: "alpha", status: null, idle: null, last_tool: null, unlogged: null, summary: null, next: null });
+    assert.deepEqual(j.projects[0], { name: "alpha", status: null, idle: null, last_tool: null, unlogged: null, summary: null, next: null, now_behind: null });
     assert.equal(j.projects[1].idle, null);
     assert.equal(j.projects[1].summary.length, 2000);
-    for (const p of j.projects) for (const v of Object.values(p)) assert.ok(v === null || ["string", "number"].includes(typeof v));
+    for (const p of j.projects) for (const v of Object.values(p)) assert.ok(v === null || ["string", "number", "boolean"].includes(typeof v));
   });
 
   test("read_chart nulls the same values and returns log entries as plain strings", async () => {
@@ -336,7 +363,7 @@ describe("value validation (§8): forbidden data nested in allowed fields", () =
     assert.equal(isError, false, text);
     noLeak(text);
     const j = JSON.parse(text);
-    assert.deepEqual(j.project, { name: "alpha", status: null, idle: null, last_tool: null, unlogged: null, summary: null, done: null, next: null });
+    assert.deepEqual(j.project, { name: "alpha", status: null, idle: null, last_tool: null, unlogged: null, summary: null, done: null, next: null, updated: null, now_behind: null });
     for (const e of j.logs) {
       assert.deepEqual(Object.keys(e).sort(), ["date", "text", "tool"]);
       for (const v of Object.values(e)) assert.equal(typeof v, "string");

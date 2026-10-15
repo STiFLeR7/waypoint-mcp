@@ -1,6 +1,6 @@
 """Read project files (LOGBOOK-SPEC §1–§2, §4.3). Never writes."""
 import re
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 from .paths import real
@@ -57,20 +57,38 @@ def _status(raw):
     return raw.lower() if raw.lower() in KNOWN_STATUS else (raw or "active")
 
 
+def _updated(raw, diagnostics, source):
+    """`- Updated:` in Now (§2.1 v1.2): a calendar date YYYY-MM-DD, else "" (with a diagnostic when it has text).
+    The bad text itself is not copied: diagnostics are shown on the dashboard."""
+    if not raw:
+        return ""
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw):
+        try:
+            return date.fromisoformat(raw).isoformat()
+        except ValueError:
+            pass
+    if diagnostics is not None:
+        diagnostics.append(f"{source}: unsupported Updated date (use YYYY-MM-DD)")
+    return ""
+
+
 def load_project(f: Path, root: Path, diagnostics=None):
     s = sections(f.read_text(encoding="utf-8"))
     head, now = s["header"], s.get("now", "")
+    rel = f.relative_to(root).as_posix()
     archived = "_archive" in f.relative_to(root).parts
-    logs = parse_log(s["log"], diagnostics, f.relative_to(root).as_posix())
+    logs = parse_log(s["log"], diagnostics, rel)
     return {
         "name": f.stem,
-        "file": f.relative_to(root).as_posix(),
+        "file": rel,
+        "archived": archived,  # by folder (§2.1): a live file whose Status says "archived" is still live
         "path": field(head, "Path"),
         "status": "archived" if archived else _status(field(head, "Status")),
         "summary": field(head, "Summary"),
         "docs": [d.strip() for d in field(head, "Docs").split(",") if d.strip()],
         "done": field(now, "Done"),
         "next": field(now, "Next"),
+        "updated": _updated(field(now, "Updated"), diagnostics, rel),
         "attention": [a.strip() for a in re.findall(r"^- Attention:[ \t]*(.+)$", head, re.M)],
         "logs": logs,
     }

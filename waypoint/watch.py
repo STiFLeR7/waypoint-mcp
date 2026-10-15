@@ -16,6 +16,8 @@ from . import logbook
 
 TOOL_ID = re.compile(r"^[a-z][a-z0-9-]{1,30}$")
 SUMMARY_MAX = 2000
+NOW_MAX = 300
+_NOW_ORDER = ("Done", "Next", "Updated")
 LOCK_WAIT, LOCK_STALE = 5.0, 30.0
 CRLF, CR, LF = chr(13) + chr(10), chr(13), chr(10)
 LOG_LINE = re.compile(r"(^|\r\n|\r|\n)## Log[ \t]*(\r\n|\r|\n|$)", re.I)
@@ -73,6 +75,55 @@ def insert_entry(text, day, tool, summary):
     return text[:at] + ("" if m[2] else eol) + eol + block + (eol if rest.strip() else "") + rest
 
 
+def clean_now(value, name):
+    """One `## Now` value for log_watch (§8.3): a single line of 1–300 characters that doesn't start with # or >."""
+    if not isinstance(value, str):
+        raise WatchError(f"{name} must be text.")
+    text = " ".join(re.sub(r"[\x00-\x1f\x7f-\x9f]", " ", value).split())  # split() also breaks on U+2028/2029
+    if not text:
+        raise WatchError(f"{name} has no printable text.")
+    if len(text) > NOW_MAX:
+        raise WatchError(f"{name} is {len(text)} characters; the cap is {NOW_MAX}. Keep it to one short line.")
+    if text[0] in "#>":
+        raise WatchError(f"{name} can't start with # or >; write it as plain text.")
+    return text
+
+
+def set_now(text, day, fields):
+    """`text` with the `## Now` lines in `fields` ({"Done": ..., "Next": ...}, already cleaned) replaced and
+    `- Updated: day` set (§8.3). The line replaced is the one a reader reads (§2.1: the first with text, else the
+    first bare one); a missing line goes right after the Now fields before it (Done, Next, Updated), else at the top
+    of Now; a missing `## Now` is created just above `## Log`. Every other byte and the line endings stay as they were."""
+    m = LOG_LINE.search(text)
+    if not m:
+        raise WatchError("this project file has no `## Log` line, so there is nowhere to log. Nothing was written.")
+    cut = m.start() + len(m[1])  # the head: everything before the `## Log` line, including its line break
+    eol = m[1] or m[2] or (re.search(r"\r\n|\r|\n", text) or [None])[0] or "\n"
+    parts = re.split(r"(\r\n|\r|\n)", text[:cut])
+    lines = [[l, s] for l, s in zip(parts[0::2], parts[1::2] + [""])]
+    now = next((i for i, (l, _) in enumerate(lines) if l.startswith("## ") and l[3:].strip().lower() == "now"), None)
+    if now is None:
+        now = len(lines) - 1
+        lines[now:now] = [["## Now", eol], ["", eol]]
+    end = next((i for i in range(now + 1, len(lines)) if lines[i][0].startswith("## ")), len(lines))
+    values, after = {**fields, "Updated": day}, now
+    for name in _NOW_ORDER:
+        body = range(now + 1, end)
+        hit = next((i for i in body if lines[i][0].startswith(f"- {name}:") and len(lines[i][0]) > len(name) + 3), None)
+        if hit is None:
+            hit = next((i for i in body if lines[i][0] == f"- {name}:"), None)
+        if name in values:
+            if hit is None:
+                hit = after + 1
+                lines.insert(hit, [f"- {name}: {values[name]}", eol])
+                end += 1
+            else:
+                lines[hit][0] = f"- {name}: {values[name]}"
+        if hit is not None:
+            after = max(after, hit)
+    return "".join(l + s for l, s in lines) + text[cut:]
+
+
 class _Lock:
     def __init__(self, path: Path):
         self.path = path
@@ -105,29 +156,39 @@ def _digest(b):
 
 
 def append(lb: Path, project: str, summary: str, tool: str, day=None, today=None, cancelled=None, commit_gate=None,
-           committed=None):
-    """Log one watch. Returns "logged" or "already" (identical entry exists). Raises WatchError on refusal."""
+           committed=None, done=None, next_=None):
+    """Log one watch; with done/next_, also set Done, Next and Updated in ## Now in the same write (§8.3).
+    Returns "logged" or "already" (an identical entry exists: nothing is written, Now included).
+    Raises WatchError on refusal."""
     day = check_input(summary, tool, day, today or date.today())
+    fields = {name: clean_now(value, name.lower()) for name, value in (("Done", done), ("Next", next_))
+              if value is not None}
     if cancelled and cancelled.is_set():
         raise WatchError("the call timed out before anything was written.")
-    live = {p["name"]: p for p in logbook.load_projects(lb) if p["status"] != "archived"}
-    if not isinstance(project, str) or project not in live:
-        raise WatchError(f"unknown project. Tracked projects: {', '.join(sorted(live)) or '(none)'}.")
-    projects_dir = (lb / "projects").resolve()
-    target = (lb / live[project]["file"]).resolve()
-    if target.parent != projects_dir or target.name.startswith(("_", ".")):
-        raise WatchError("that project's file isn't a plain file in projects/; nothing was written.")
     with _Lock(lb / ".waypoint.lock"):
         if cancelled and cancelled.is_set():
             raise WatchError("the call timed out before anything was written.")
+        # Look the project up under the lock: on Windows a concurrent writer's os.replace can briefly hide its file.
+        live = {p["name"]: p for p in logbook.load_projects(lb) if not p["archived"]}
+        if not isinstance(project, str) or project not in live:
+            raise WatchError(f"unknown project. Tracked projects: {', '.join(sorted(live)) or '(none)'}.")
+        projects_dir = (lb / "projects").resolve()
+        target = (lb / live[project]["file"]).resolve()
+        if target.parent != projects_dir or target.name.startswith(("_", ".")):
+            raise WatchError("that project's file isn't a plain file in projects/; nothing was written.")
         replace_busy = False
         for attempt in range(5):
             if cancelled and cancelled.is_set():
                 raise WatchError("the call timed out before anything was written.")
-            raw = target.read_bytes()
+            try:
+                raw = target.read_bytes()
+            except FileNotFoundError:
+                raise WatchError("that project was just moved or removed; run take_fix to see current projects") from None
             new = insert_entry(raw.decode("utf-8"), day, tool, summary)
             if new is None:
                 return "already"
+            if fields:
+                new = set_now(new, day, fields)
             fd, tmp = tempfile.mkstemp(dir=target.parent, prefix=".watch.", suffix=".tmp")
             try:
                 with os.fdopen(fd, "wb") as fh:

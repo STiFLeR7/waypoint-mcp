@@ -38,7 +38,8 @@
   "velocity": 1,
   "stale": 1,
   "untracked": 1,
-  "unlogged": 1
+  "unlogged": 1,
+  "behind": 1
  },
  "projects": [
   {
@@ -53,6 +54,7 @@
    ],
    "done": "Hourly forecast chart, with unit switching.",
    "next": "Offline cache for the last forecast.",
+   "updated": "2026-10-10",
    "attention": [
     "The forecast API key expires on 2026-10-31; rotate it."
    ],
@@ -64,6 +66,7 @@
    "git": 0,
    "stale": false,
    "unlogged": 1,
+   "now_behind": false,
    "logs": [
     {
      "ts": 1791590400.0,
@@ -90,6 +93,7 @@
    ],
    "done": "Calendar feed for all three harbours.",
    "next": "Handle the daylight-saving change in the feed.",
+   "updated": "2026-07-28",
    "attention": [],
    "last": 1785542400.0,
    "last_tool": "chatgpt",
@@ -99,6 +103,7 @@
    "git": 0,
    "stale": true,
    "unlogged": 0,
+   "now_behind": true,
    "logs": [
     {
      "ts": 1785542400.0,
@@ -126,6 +131,7 @@
    ],
    "done": "v1.0 released.",
    "next": "Nothing planned.",
+   "updated": "",
    "attention": [],
    "last": 1789905600.0,
    "last_tool": "claude-code",
@@ -135,6 +141,7 @@
    "git": 0,
    "stale": false,
    "unlogged": 0,
+   "now_behind": false,
    "logs": [
     {
      "ts": 1789862400.0,

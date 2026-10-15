@@ -1,12 +1,10 @@
 # Waypoint
 
-**Every voyage (project), every navigator (AI tool), one chart.**
+**Waypoint keeps one project log across your AI coding tools, so you can see where work stopped and what comes next.**
 
-## Dead reckoning
+You switch between projects and between Claude Code, Codex and ChatGPT. Each tool has its own memory, but none of them knows what the others did. Waypoint gives every tool the same record per project (what it is, where you left off, what's next, what needs attention), and shows where that record has fallen behind the actual activity.
 
-A dozen projects at once, and three or four AI tools taking turns at the helm: Claude Code in the morning, Codex in the afternoon, ChatGPT for the hard question at night. None of them remembers the previous watch (session). So every session starts with *dead reckoning*: where was this, what changed, who touched it last? Projects drift. Side work goes uncharted. Finished work never makes it into port.
-
-Waypoint is the **ship's log** (one Markdown file per project) that every navigator writes to, and the **chart** (dashboard) that shows all of it at once.
+*The story:* each project is a voyage, each AI tool a navigator, and the logbook is the ship's log they all write to. The dashboard is the chart.
 
 It deals with two kinds of truth:
 
@@ -16,22 +14,24 @@ It deals with two kinds of truth:
 Where the two disagree, the chart says so. A tool that worked on a project but logged nothing leaves an **unlogged watch** (session). That's how the chart keeps itself honest, even when a tool forgets the rule.
 
 ```
-$ waypoint fix
-Fix taken (sync): 3 voyages (projects), 1 underway (active) this week, 1 hazard (attention item), 1 with unlogged watches (sessions), 1 adrift (stale), 1 uncharted (untracked folders).
+$ waypoint refresh
+Dashboard refreshed: 3 projects, 1 active this week, 1 attention item, 1 with unlogged sessions, 1 stale, 1 untracked folder.
 ```
 
-That's the fictional logbook in [`examples/logbook/`](examples/logbook/): its [chart](examples/logbook/DASHBOARD.md) shows each case. `waypoint fix` also writes `chart.html`, the same chart as a page you open in your browser.
+That's the fictional logbook in [`examples/logbook/`](examples/logbook/): its [chart](examples/logbook/DASHBOARD.md) shows each case. `waypoint refresh` also writes `chart.html`, the same chart as a page you open in your browser.
 
-## Take a fix
+## Get started
 
-Requires Python 3.11 or newer; no other dependencies.
+Requires Python 3.11 or newer; no other dependencies. The arrow-key screen is optional: install `waypoint-mcp[tui]` (adds Rich and prompt_toolkit) and run `waypoint`.
 
 **macOS / Linux**
 ```bash
 pipx install waypoint-mcp         # or: python -m pip install waypoint-mcp
 waypoint setup                    # fitting out: logbook, roots, the rule and MCP server for each AI CLI it finds
 waypoint add ~/code/my-project    # chart a voyage (project); once per project
-waypoint fix                      # take a fix (sync): redraws DASHBOARD.md, dashboard.json and chart.html (--open opens it)
+waypoint refresh                  # refresh the dashboard: DASHBOARD.md, dashboard.json and chart.html (--open opens it)
+waypoint status                   # everything at a glance, with fixes for problems
+waypoint archive <project>        # hide a finished project, keep its log (also: restore, remove, ignore)
 ```
 
 **Windows (PowerShell)**
@@ -39,15 +39,18 @@ waypoint fix                      # take a fix (sync): redraws DASHBOARD.md, das
 py -m pip install waypoint-mcp
 waypoint setup
 waypoint add $HOME\code\my-project
-waypoint fix
+waypoint refresh
 ```
 
 - **`waypoint` not found?** Its install folder isn't on PATH, and AI tools need it there too (they start `waypoint mcp`). Installed with pipx: run `pipx ensurepath`, then open a new terminal. Installed with pip: add the scripts folder pip warned about to PATH; until then `python -m waypoint …` (Windows: `py -m waypoint …`) runs it with that same Python.
+- **The screen** (`pipx install "waypoint-mcp[tui]"`): `waypoint setup` walks through logbook, roots, projects and AI tools, shows every change in a Review and writes nothing before Apply; `waypoint` alone then manages projects (archive, restore, remove, ignore, track) and tools (connect, disconnect, fix drift) and shows status. Keys: ↑↓ move, Space toggle, Enter next, ← back, `/` search, Esc quit. Every action is also a plain command; without the extra, or with any `setup` flag, you get numbered prompts. `NO_COLOR` is honoured.
 - `setup` shows every file it would change and asks once. It remembers the logbook, so later commands need no `--logbook`. It never edits your own `CLAUDE.md` or `AGENTS.md` text: it adds Waypoint's own file or a marked block, and `waypoint rules --uninstall` removes exactly those.
-- Make the logbook a **private** git repo, then `waypoint fix --push` pulls, redraws, commits only logbook data, and pushes.
+- Make the logbook a **private** git repo, then `waypoint refresh --push` pulls, redraws, commits only logbook data, and pushes.
 - From a clone of this repo: `python -m pip install -e .`
 
 ## Who's aboard
+
+Automatic session history (which project, which tool, when) comes from **Claude Code and Codex** only. The other tools follow the rule and can use the MCP tools, but their sessions don't show up on their own.
 
 | Navigator (AI CLI) | Tier | What Waypoint wires |
 |---|---|---|
@@ -58,8 +61,9 @@ waypoint fix
 | Cursor, Windsurf, Kiro, Cline, Claude Desktop, Goose, opencode, Amp | Snippet | `waypoint connect <cli>` prints the config to paste; writes nothing |
 | ChatGPT | Beacon | remote MCP server you host ([Raise the beacon](#raise-the-beacon)) |
 
-- **The rule** tells the tool to add a log entry after meaningful work. **The local MCP server** (`waypoint mcp`, stdio) gives it three tools: `take_fix` (the overview), `read_chart` (one project), `log_watch` (append one log entry, with the tool's own id, under a lock).
-- `waypoint connect <cli>` wires one CLI at any time. MCP servers are registered through each CLI's own `mcp add` command. An existing server already named `waypoint` is never replaced; `--no-mcp` installs only the rule.
+- **The rule** tells the tool to add a log entry after meaningful work. **The local MCP server** (`waypoint mcp`, stdio) gives it four tools: `take_fix` (the overview), `read_chart` (one project), `log_watch` (append one log entry, with the tool's own id, under a lock; with `done`/`next` it also updates Done, Next and Updated in Now), and `status` (whether Waypoint is set up right: states and counts only, no paths).
+- `waypoint connect <cli>` wires one CLI at any time, for every project. Add `--project <repo>` (repeatable) to wire only that repo: the rule goes into the repo (an import, a link to the logbook's rule, or a copied block) and the MCP entry is scoped to it; files Waypoint creates there stay out of git through `.git/info/exclude`. `waypoint disconnect <cli> [--project <repo>]` removes only what Waypoint added.
+- MCP servers are registered through each CLI's own `mcp add` command where it has one (Codex and Copilot CLI per repo: Waypoint edits their repo file). If another server already uses the name `waypoint`, Waypoint registers as `waypoint-local`; `--no-mcp` installs only the rule. For Codex, Waypoint also offers to add the logbook to its sandbox's `writable_roots` (`--no-writable-root` skips it).
 - `waypoint rules` reports each tool's rule: in sync, drifted, missing, or shadowed (Codex reads an `AGENTS.override.md` instead).
 - **Known limits:** Claude Code deletes transcripts after 30 days by default. The Claude Code and Codex history formats are unofficial; the chart's source health says when a reader breaks.
 
@@ -70,11 +74,21 @@ waypoint fix
 | **Voyage**: underway / coasting / at anchor / in port | project: active / occasional / paused / done |
 | **Hazards** | `- Attention:` lines, plus drifted rules and unreadable sources |
 | **Unlogged watches** | AI sessions after the day of the project's last log entry |
+| **Now behind log** | `## Now` was last updated before the newest log entry |
 | **Adrift** | idle past its threshold (21 days if active, 60 if occasional) |
 | **Uncharted waters** | folders with recent AI activity but no project file |
 | **Harbour** | `projects/_archive/`: finished voyages, never deleted |
 
 Waypoint never changes a project's Status, never archives, and never writes a log entry on its own: it flags, and you decide.
+
+## What the signals mean
+
+- **Activity** means a tool touched the project (a session, a commit or a log entry). It doesn't mean work got done.
+- **Unlogged sessions** are Claude Code and Codex sessions from the day after the newest log entry onward. Log entries carry a date, not a time, so work later on the same day as an entry counts as logged.
+- **Now behind log** means the project's `## Now` was last updated (its `- Updated:` date) before the newest log entry, so *Where you left off* and *Next* may be out of date. Projects without an `Updated` line never show it; `log_watch` sets it when you pass `done`/`next`.
+- **A log entry** records what someone wrote down. It doesn't verify the code.
+- **Available context** isn't proof that an agent read it.
+- **Freshness:** `chart.html` and `DASHBOARD.md` are snapshots from the last `waypoint refresh`. The local MCP server reads the logbook live (AI activity is cached for up to 30 seconds). The beacon's dashboard fields are as of the last push; its log entries are read live.
 
 ## Privacy
 
@@ -103,7 +117,8 @@ The logbook format, the rule, the chart's JSON and every access contract are in 
 ## Development
 
 ```bash
-python -m unittest                # stdlib only
+python -m unittest                # stdlib only (the screen's tests skip)
+python -m pip install -e ".[tui]" && python -m unittest   # with the screen's tests
 python examples/build.py --check  # the example chart (Linux or macOS)
 cd beacon && npm test             # the beacon
 ```

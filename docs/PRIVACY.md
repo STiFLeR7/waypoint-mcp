@@ -11,7 +11,7 @@ Waypoint keeps everything in files you own. This page lists what it reads, what 
 ## What it writes
 
 - `waypoint fix`: `DASHBOARD.md`, `dashboard.json` and `chart.html` in the logbook. `chart.html` loads nothing from the network.
-- `waypoint add`: one new project file. `log_watch`: one log entry.
+- `waypoint add`: one new project file. `log_watch`: one log entry, and with `done`/`next` the Done, Next and Updated lines in that project's `## Now`.
 - `waypoint setup`, `connect`, `rules`: Waypoint's own rule file or marked block in each AI tool's config folder, and the tool's MCP registration through its own `mcp add` command. Each is shown before it's written and backed up.
 - The logbook's location, in `%APPDATA%\waypoint\logbook` (Windows) or `~/.config/waypoint/logbook`.
 

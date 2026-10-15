@@ -72,6 +72,7 @@ test("GET /authorize shows an escaped consent page with the library's headers", 
   assert.ok(!html.includes("<script>alert"));
   assert.ok(html.includes("&#60;script&#62;"));
   assert.ok(html.includes("chatgpt.com"));
+  assert.ok(html.includes("add log entries to your projects (with the app's own tool id)"));
   assert.ok(html.includes('name="handle" value="H1"'));
   assert.deepEqual(log, ["parse", "begin"]);
 });

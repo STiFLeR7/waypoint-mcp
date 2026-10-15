@@ -34,7 +34,8 @@ TREE_NEVER = re.compile(r"(^|/)(\.env(\..*)?|\.dev\.vars|wrangler\.local\.jsonc?
                         r"|projects/[^_/][^/]*\.md|projects/_archive/[^/]+\.md|DASHBOARD\.md|dashboard\.json|(?<!waypoint/templates/)chart\.html|\.waypoint\.lock)$")
 EXAMPLE = "examples/logbook/"
 # the maintainer's history (paths, reviews of private work): kept in the private repo, not shipped publicly
-PRIVATE_ONLY = ("docs/reviews/", "docs/research/", "docs/PLAN.md", "docs/ui/HANDOFF-CHATGPT.md")
+PRIVATE_ONLY = ("docs/reviews/", "docs/research/", "docs/PLAN.md", "docs/ui/HANDOFF-CHATGPT.md", "docs/superpowers/", "docs/prototypes/",
+                "docs/website/")
 
 
 def patterns():

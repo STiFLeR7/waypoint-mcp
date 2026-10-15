@@ -8,6 +8,7 @@
 ## Now
 - Done: Hourly forecast chart, with unit switching.
 - Next: Offline cache for the last forecast.
+- Updated: 2026-10-10
 
 ## Log
 ### 2026-10-10 — codex

@@ -28,9 +28,9 @@ from waypoint.paths import real
 DAY = 86400
 AI_EXES = ("claude", "codex", "gemini", "copilot")
 TOP_KEYS = {"schema", "generated", "config", "sources", "rules", "kpi", "projects", "archived", "untracked", "pulse", "feed"}
-KPI_KEYS = {"tracked", "attention", "velocity", "stale", "untracked", "unlogged"}
-PROJECT_KEYS = {"name", "file", "path", "status", "summary", "docs", "done", "next", "attention", "last", "last_tool",
-                "idle", "claude", "codex", "git", "stale", "unlogged", "logs"}
+KPI_KEYS = {"tracked", "attention", "velocity", "stale", "untracked", "unlogged", "behind"}
+PROJECT_KEYS = {"name", "file", "path", "status", "summary", "docs", "done", "next", "updated", "attention", "last", "last_tool",
+                "idle", "claude", "codex", "git", "stale", "unlogged", "now_behind", "logs"}
 TITLES = ("refactor app parser", "app codex thread", "very old app session", "old app work", "scratch idea",
           "tools session")
 REAL_HOME_FILES = (".claude/rules/waypoint.md", ".claude/CLAUDE.md", ".codex/AGENTS.md", ".codex/AGENTS.override.md",
@@ -180,7 +180,7 @@ class Story(unittest.TestCase):
     def fix(self):
         code, out = self.run_cli("fix", "--logbook", str(self.lb), "--home", str(self.home))
         self.assertEqual(code, 0, out)
-        self.assertIn("Fix taken", out)
+        self.assertIn("Dashboard refreshed", out)
         return self.check_chart()
 
     def mcp(self, *calls):
@@ -199,7 +199,7 @@ class Story(unittest.TestCase):
         replies = [json.loads(l) for l in p.stdout.decode("utf-8").splitlines()]  # stdout: protocol only
         self.assertEqual([r["id"] for r in replies], list(range(len(calls) + 2)))
         self.assertEqual(replies[0]["result"]["protocolVersion"], "2025-06-18")
-        self.assertEqual([t["name"] for t in replies[1]["result"]["tools"]], ["take_fix", "read_chart", "log_watch"])
+        self.assertEqual([t["name"] for t in replies[1]["result"]["tools"]], ["take_fix", "read_chart", "log_watch", "status"])
         self.assert_private(p.stdout.decode("utf-8"))
         return replies[2:]
 
@@ -225,6 +225,7 @@ class Story(unittest.TestCase):
         self.assertEqual(k["tracked"], len(live))
         self.assertEqual(k["untracked"], len(d["untracked"]))
         self.assertEqual(k["unlogged"], sum(1 for p in live if p["unlogged"]))
+        self.assertEqual(k["behind"], sum(1 for p in live if p["now_behind"]))
         self.assertEqual(k["attention"], sum(len(p["attention"]) for p in live))
         self.assertEqual(k["stale"], sum(p["stale"] for p in live))
         self.assertEqual(len(d["pulse"]), d["config"]["pulse_days"])
@@ -294,7 +295,7 @@ class Story(unittest.TestCase):
 
         d = self.fix()
         by = {p["name"]: p for p in d["projects"]}
-        self.assertEqual(d["kpi"], {"tracked": 2, "attention": 1, "velocity": 2, "stale": 0, "untracked": 2, "unlogged": 1})
+        self.assertEqual(d["kpi"], {"tracked": 2, "attention": 1, "velocity": 2, "stale": 0, "untracked": 2, "unlogged": 1, "behind": 0})
         self.assertEqual((by["app"]["unlogged"], by["tools"]["unlogged"]), (2, 0))  # nested + codex; old one is logged
         self.assertEqual(by["app"]["last_tool"], "codex")
         self.assertEqual(by["app"]["idle"], 2)

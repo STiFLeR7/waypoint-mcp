@@ -4,6 +4,7 @@ import io
 import json
 import os
 import tempfile
+import tomllib
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -45,6 +46,44 @@ class Base(unittest.TestCase):
 
 
 class Apply(Base):
+    def test_config_diff_shows_only_both_waypoint_regions(self):
+        f = self.home / ".codex" / "config.toml"
+        old = '[mcp_servers.waypoint]\nurl = "https://example.invalid/mcp"\n\n'
+        f.write_text(old, encoding="utf-8")
+        c = rules.plan_writable_root(f, self.lb)
+        c.new = rules.toml_edit(old, rules.SANDBOX, rules.sandbox_block(self.lb))
+        c.new = rules.toml_edit(c.new, rules.MCP_MARKS,
+                                '[mcp_servers."waypoint-local"]\ncommand = "waypoint"')
+        diff = c.diff()
+        self.assertNotIn("example.invalid", diff)
+        self.assertIn("mcp_servers", diff)
+        self.assertIn("waypoint:sandbox:begin", diff)
+        c.old = c.new
+        c.new = ""
+        self.assertNotIn("example.invalid", c.diff())
+
+    @unittest.skipUnless(rules.can_symlink(), "needs symlink support")
+    def test_uninstall_refuses_symlinked_claude_owned_file(self):
+        target = self.home / "target.md"
+        target.write_text(rules.claude_file_text(self.lb), encoding="utf-8")
+        link = rules.claude_rule_file(self.home)
+        link.parent.mkdir(parents=True)
+        link.symlink_to(target)
+        result = rules.apply(rules.plan_uninstall(self.home, mcp=False, tools=("claude-code",)))
+        self.assertTrue(any("is a link to" in (err or "") for _, err in result))
+        self.assertEqual(target.read_text(encoding="utf-8"), rules.claude_file_text(self.lb))
+
+    @unittest.skipUnless(rules.can_symlink(), "needs symlink support")
+    def test_symlinked_mcp_file_refusal_names_server_entry_action(self):
+        target = self.home / "mcp.json"
+        target.write_text('{"mcpServers": {"waypoint": {}}}\n', encoding="utf-8")
+        link = self.home / ".github" / "mcp.json"
+        link.parent.mkdir()
+        link.symlink_to(target)
+        from waypoint.rules import Change
+        [(change, error)] = rules.apply([Change(link, "remove", target.read_text(encoding="utf-8"), None)])
+        self.assertIn("remove Waypoint's server entry from that file by hand", error)
+
     def test_target_changed_after_plan_is_refused_not_overwritten(self):  # H1
         self.init()
         agents = self.home / ".codex" / "AGENTS.md"
@@ -133,12 +172,31 @@ class Setup(Base):
         self.assertIn("Nothing to change.", out)
         self.assertEqual(f.stat().st_mtime_ns, before)
 
-    def test_codex_writable_roots_guidance(self):
+    def test_codex_writable_root_is_a_reviewed_change(self):
         code, out = self.run_cli("setup", "--yes", "--logbook", str(self.lb), "--root", str(self.root), "--tool", "codex",
-                                 "--home", str(self.home))
+                                 "--no-mcp", "--home", str(self.home))
+        self.assertEqual(code, 0, out)
+        cfg = self.home / ".codex" / "config.toml"
         self.assertIn("writable_roots", out)
-        self.assertNotIn("sandbox_workspace_write", (self.home / ".codex").joinpath("config.toml").read_text(encoding="utf-8")
-                         if (self.home / ".codex" / "config.toml").exists() else "")
+        self.assertEqual(tomllib.loads(cfg.read_text(encoding="utf-8"))["sandbox_workspace_write"]["writable_roots"],
+                         [str(self.lb.resolve())])
+        rules.apply(rules.plan_uninstall(self.home, mcp=False))
+        self.assertNotIn("sandbox_workspace_write", cfg.read_text(encoding="utf-8"))
+
+    def test_an_existing_sandbox_table_is_left_to_the_user(self):
+        cfg = self.home / ".codex" / "config.toml"
+        cfg.write_text("[sandbox_workspace_write]\nnetwork_access = true\n", encoding="utf-8")
+        code, out = self.run_cli("setup", "--yes", "--logbook", str(self.lb), "--root", str(self.root), "--tool", "codex",
+                                 "--no-mcp", "--home", str(self.home))
+        self.assertEqual(code, 0, out)
+        self.assertIn("yourself", out)
+        self.assertEqual(cfg.read_text(encoding="utf-8"), "[sandbox_workspace_write]\nnetwork_access = true\n")
+
+    def test_no_writable_root_skips_it(self):
+        code, out = self.run_cli("setup", "--yes", "--logbook", str(self.lb), "--root", str(self.root), "--tool", "codex",
+                                 "--no-mcp", "--no-writable-root", "--home", str(self.home))
+        self.assertEqual(code, 0, out)
+        self.assertFalse((self.home / ".codex" / "config.toml").exists())
 
 
 class Add(Base):
@@ -175,7 +233,7 @@ class Add(Base):
         with mock.patch("waypoint.chart.build", return_value={"kpi": {"tracked": 0, "untracked": 1}}), \
                 mock.patch("waypoint.chart.write"):
             code, out = self.run_cli("fix", "--logbook", str(self.lb), "--home", str(self.home))
-        self.assertIn("1 folder with recent AI activity is uncharted", out)
+        self.assertIn("1 folder with recent AI activity is untracked", out)
 
 
 class Connect(Base):
@@ -212,18 +270,50 @@ class Connect(Base):
         self.assertEqual(ran, [["/bin/codex", "mcp", "add", "waypoint", "--", "waypoint", "mcp"]])
         self.assertIn("log_watch (tool id codex)", out)
 
-    def test_a_different_waypoint_server_is_refused_and_nothing_is_written(self):
+    def test_a_taken_name_registers_waypoint_local(self):  # Review Focus 4
         self.init()
         (self.home / ".codex" / "config.toml").write_text('[mcp_servers.waypoint]\nurl = "https://x.example/mcp"\n',
                                                          encoding="utf-8")
         ran, *patches = self.mcp()
         with patches[0], patches[1], patches[2]:
             code, out = self.run_cli("connect", "codex", "--yes", "--logbook", str(self.lb), "--home", str(self.home))
-        self.assertEqual(code, 1)
-        self.assertIn("a different server", out)
+        self.assertEqual(code, 0, out)
+        self.assertIn("waypoint-local", out)
         self.assertNotIn("x.example", out)  # never print its URL
+        self.assertEqual(ran, [["/bin/codex", "mcp", "add", "waypoint-local", "--", "waypoint", "mcp"]])
+
+    def test_both_names_taken_is_refused_and_nothing_is_written(self):
+        self.init()
+        (self.home / ".codex" / "config.toml").write_text(
+            '[mcp_servers.waypoint]\nurl = "https://x.example/mcp"\n[mcp_servers.waypoint-local]\nurl = "https://y.example"\n',
+            encoding="utf-8")
+        ran, *patches = self.mcp()
+        with patches[0], patches[1], patches[2]:
+            code, out = self.run_cli("connect", "codex", "--yes", "--logbook", str(self.lb), "--home", str(self.home))
+        self.assertEqual(code, 1)
+        self.assertIn("both", out)
+        self.assertNotIn("example", out)
         self.assertEqual(ran, [])
         self.assertFalse((self.home / ".codex" / "AGENTS.md").exists())  # the rule waits too
+
+    def test_uninstall_removes_waypoint_local_and_leaves_the_beacon(self):  # Review Focus 4
+        (self.home / ".codex" / "config.toml").write_text(
+            '[mcp_servers.waypoint]\nurl = "https://x.example/mcp"\n'
+            '[mcp_servers.waypoint-local]\ncommand = "waypoint"\nargs = ["mcp"]\n', encoding="utf-8")
+        ran, *patches = self.mcp()
+        with patches[0], patches[1], patches[2]:
+            rules.apply(rules.plan_uninstall(self.home))
+        self.assertEqual(ran, [["/bin/codex", "mcp", "remove", "waypoint-local"]])
+
+    def test_off_path_registers_the_full_path(self):  # Review Focus 5
+        self.init()
+        ran, *patches = self.mcp()
+        with patches[0], patches[1], patches[2], \
+                mock.patch("waypoint.clis.server_command", return_value="/opt/wp/bin/waypoint"):
+            code, out = self.run_cli("connect", "codex", "--yes", "--logbook", str(self.lb), "--home", str(self.home))
+        self.assertEqual(code, 0, out)
+        self.assertEqual(ran, [["/bin/codex", "mcp", "add", "waypoint", "--", "/opt/wp/bin/waypoint", "mcp"]])
+        self.assertIn("full path", out)
 
     def test_no_mcp_installs_the_rule_only(self):
         self.init()

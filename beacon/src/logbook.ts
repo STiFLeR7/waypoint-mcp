@@ -13,6 +13,8 @@ export type Project = {
   summary: string | null;
   done: string | null;
   next: string | null;
+  updated: string | null;
+  now_behind: boolean | null;
 };
 export type Dashboard = { generated: number | null; kpi: Record<string, number | null>; projects: Project[]; dataComplete: boolean | null };
 export type Entry = { date: string; tool: string; text: string };
@@ -21,6 +23,7 @@ export type Entry = { date: string; tool: string; text: string };
 export class ToolError extends Error {}
 
 export const TOOL_ID = "chatgpt";
+export const KNOWN_TOOLS = ["claude-code", "codex", "chatgpt", "gemini-cli", "copilot-cli", "cursor", "windsurf", "kiro", "goose", "cline", "claude-desktop", "opencode", "amp"] as const;
 export const SUMMARY_MAX = 2000;
 export const TEXT_MAX = 2000; // cap on any one text field returned by a read
 export const FILE_MAX_BYTES = 900_000; // GitHub's contents API stops returning content above 1 MB
@@ -110,7 +113,7 @@ function dataComplete(value: unknown): boolean | null {
   return SOURCES.every((name) => rec(sources[name]).state === "ok") ? true : null;
 }
 
-export const KPI_KEYS = ["tracked", "attention", "velocity", "stale", "untracked", "unlogged"];
+export const KPI_KEYS = ["tracked", "attention", "velocity", "stale", "untracked", "unlogged", "behind"];
 
 /** Only the fields the beacon may use, each a capped string, a finite number or null. */
 export function cleanDashboard(raw: Record<string, unknown>): Dashboard {
@@ -131,6 +134,8 @@ export function cleanDashboard(raw: Record<string, unknown>): Dashboard {
       summary: str(p.summary, TEXT_MAX),
       done: str(p.done, TEXT_MAX),
       next: str(p.next, TEXT_MAX),
+      updated: typeof p.updated === "string" && isDate(p.updated) ? p.updated : null,
+      now_behind: typeof p.now_behind === "boolean" ? p.now_behind : null,
     });
   }
   return {
@@ -199,7 +204,7 @@ export function readLog(text: string): Entry[] {
 }
 
 /** Every line quoted with "> " (§2.2), so pasted text can never become a heading or field. */
-export function entryBlock(date: string, summary: string, eol: string) {
+export function entryBlock(date: string, summary: string, eol: string, tool = TOOL_ID) {
   const lines = summary
     .replace(/\r\n?/g, "\n")
     .replace(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u2028\u2029]/g, " ")
@@ -208,7 +213,7 @@ export function entryBlock(date: string, summary: string, eol: string) {
   // Leading and trailing blank lines go; inner blank lines stay, as bare ">" lines.
   while (lines.length && !lines[0]) lines.shift();
   while (lines.length && !lines[lines.length - 1]) lines.pop();
-  return [`### ${date} — ${TOOL_ID}`, ...lines.map((l) => (l ? `> ${l}` : ">"))].join(eol) + eol;
+  return [`### ${date} — ${tool}`, ...lines.map((l) => (l ? `> ${l}` : ">"))].join(eol) + eol;
 }
 
 /**
@@ -216,12 +221,12 @@ export function entryBlock(date: string, summary: string, eol: string) {
  * first entry are normalised to that one, and every other byte stays as it was.
  * Returns null when the newest entry (the first one, where writers put it) is already identical.
  */
-export function insertEntry(text: string, date: string, summary: string): string | null {
+export function insertEntry(text: string, date: string, summary: string, tool = TOOL_ID): string | null {
   const s = logStart(text);
   if (!s) throw new ToolError("This project file has no `## Log` line, so there is nowhere to log. Nothing was written.");
   // The newline style of the matched `## Log` line (LF, CRLF or CR); if it ends the file, the file's first one.
   const eol = s.eol || (/\r\n|\r|\n/.exec(text)?.[0] ?? "\n");
-  const block = entryBlock(date, summary, eol);
+  const block = entryBlock(date, summary, eol, tool);
   const rest = text.slice(s.at);
   const [newest] = parseEntries(rest);
   const [mine] = parseEntries(block);
@@ -244,26 +249,91 @@ export function checkEntry(summary: unknown, date: unknown, now: Date): { summar
   return { summary, date };
 }
 
-export type LogResult = { written: boolean; date: string; attempts: number };
+export const NOW_MAX = 300;
+export type NowFields = { Done?: string; Next?: string };
+const NOW_ORDER = ["Done", "Next", "Updated"] as const;
+
+/** One `## Now` value for log_watch (§8.3): a single line of 1–300 characters that doesn't start with # or >. */
+export function cleanNow(value: unknown, name: string): string {
+  if (typeof value !== "string") throw new ToolError(`${name} must be text.`);
+  const text = value.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").split(/\s+/).filter(Boolean).join(" ");
+  if (!text) throw new ToolError(`${name} has no printable text.`);
+  if ([...text].length > NOW_MAX) throw new ToolError(`${name} is ${[...text].length} characters; the cap is ${NOW_MAX}. Keep it to one short line.`);
+  if (text[0] === "#" || text[0] === ">") throw new ToolError(`${name} can't start with # or >; write it as plain text.`);
+  return text;
+}
+
+export function checkNow(done: unknown, next: unknown): NowFields {
+  const out: NowFields = {};
+  if (done !== undefined && done !== null) out.Done = cleanNow(done, "done");
+  if (next !== undefined && next !== null) out.Next = cleanNow(next, "next");
+  return out;
+}
+
+/** Set Done/Next in `## Now` and `- Updated: date` (§8.3); mirrors waypoint/watch.py set_now byte for byte. */
+export function setNow(text: string, date: string, fields: NowFields): string {
+  const m = LOG_LINE.exec(text);
+  if (!m) throw new ToolError("This project file has no `## Log` line, so there is nowhere to log. Nothing was written.");
+  const cut = m.index + m[1].length; // the head: everything before the `## Log` line, including its line break
+  const eol = m[1] || m[2] || (/\r\n|\r|\n/.exec(text)?.[0] ?? "\n");
+  const parts = text.slice(0, cut).split(/(\r\n|\r|\n)/);
+  const lines: [string, string][] = [];
+  for (let i = 0; i < parts.length; i += 2) lines.push([parts[i], parts[i + 1] ?? ""]);
+  let now = lines.findIndex(([l]) => l.startsWith("## ") && l.slice(3).trim().toLowerCase() === "now");
+  if (now < 0) {
+    now = lines.length - 1; // the empty remainder after the head's last line break
+    lines.splice(now, 0, ["## Now", eol], ["", eol]);
+  }
+  let end = lines.findIndex(([l], i) => i > now && l.startsWith("## "));
+  if (end < 0) end = lines.length;
+  const values: Record<string, string | undefined> = { ...fields, Updated: date };
+  let after = now;
+  for (const name of NOW_ORDER) {
+    let hit = -1;
+    for (let i = now + 1; i < end && hit < 0; i++) if (lines[i][0].startsWith(`- ${name}:`) && lines[i][0].length > name.length + 3) hit = i;
+    for (let i = now + 1; i < end && hit < 0; i++) if (lines[i][0] === `- ${name}:`) hit = i;
+    const value = values[name];
+    if (value !== undefined) {
+      const line = `- ${name}: ${value}`;
+      if (hit < 0) {
+        hit = after + 1;
+        lines.splice(hit, 0, [line, eol]);
+        end++;
+      } else lines[hit][0] = line;
+    }
+    if (hit >= 0) after = Math.max(after, hit);
+  }
+  return lines.map(([l, s]) => l + s).join("") + text.slice(cut);
+}
+
+export type LogResult = { written: boolean; date: string; attempts: number; now: string[]; tool: string };
 
 /**
- * Add one chatgpt entry to a tracked project: GET (text + sha), insert, PUT with that sha.
- * On a sha conflict, re-read, re-check idempotency, and try again, up to MAX_ATTEMPTS.
+ * Add one caller-attributed entry to a tracked project (and, with done/next, set Done, Next and Updated in ## Now):
+ * GET (text + sha), insert, PUT with that sha. On a sha conflict, re-read, re-check idempotency, and try again,
+ * up to MAX_ATTEMPTS. An entry that is already newest applies nothing, Now included.
  */
-export async function logWatch(g: Gh, d: Dashboard, name: unknown, summary: unknown, date: unknown, now: Date): Promise<LogResult> {
+export async function logWatch(
+  g: Gh, d: Dashboard, name: unknown, summary: unknown, date: unknown, now: Date, done?: unknown, next?: unknown, tool: unknown = TOOL_ID,
+): Promise<LogResult> {
+  tool ??= TOOL_ID;
+  if (typeof tool !== "string" || !(KNOWN_TOOLS as readonly string[]).includes(tool)) throw new ToolError("tool must be one of the known tool ids.");
   const p = findProject(d, name);
   const e = checkEntry(summary, date, now);
+  const fields = checkNow(done, next);
+  const changed = Object.keys(fields);
   const label = `the log for ${p.name}`;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     const { text, sha } = await readFile(g, p.file, label);
-    const next = insertEntry(text, e.date, e.summary);
-    if (next === null) return { written: false, date: e.date, attempts: attempt };
-    const bytes = new TextEncoder().encode(next).length;
+    const withEntry = insertEntry(text, e.date, e.summary, tool);
+    if (withEntry === null) return { written: false, date: e.date, attempts: attempt, now: changed, tool };
+    const updated = changed.length ? setNow(withEntry, e.date, fields) : withEntry;
+    const bytes = new TextEncoder().encode(updated).length;
     if (bytes > FILE_MAX_BYTES) {
       throw new ToolError(`${label} would grow to ${bytes} bytes, over the ${FILE_MAX_BYTES}-byte cap. Nothing was written; trim or archive old entries first.`);
     }
-    if (await writeFile(g, p.file, next, sha, `log: ${p.name} (${TOOL_ID}, via beacon)`, label)) {
-      return { written: true, date: e.date, attempts: attempt };
+    if (await writeFile(g, p.file, updated, sha, `log: ${p.name} (${tool}, via beacon)`, label)) {
+      return { written: true, date: e.date, attempts: attempt, now: changed, tool };
     }
   }
   throw new ToolError(`${label} kept changing under us (${MAX_ATTEMPTS} conflicting writes). Nothing was written; try again shortly.`);
