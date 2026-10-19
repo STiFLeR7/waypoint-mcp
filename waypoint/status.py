@@ -5,9 +5,18 @@ from pathlib import Path
 
 from . import __version__, chart, clis, config, logbook, project as project_mod, rules
 
-SPEC = "1.2"
+SPEC = "1.3"
 RULE_FIX = {"drifted": "run: waypoint rules --install", "missing": "run: waypoint rules --install",
             "shadowed": "run: waypoint rules --install --codex-override"}
+
+
+def hooks_seen(cli_id):
+    """ISO time a hook last ran for this tool (spec B.4), or None."""
+    from . import hook
+    try:
+        return (hook.hooks_dir() / f"seen-{cli_id}").read_text(encoding="utf-8").strip() or None
+    except OSError:
+        return None
 
 
 def mcp_state(cli_id, home: Path, f: Path | None = None, project: Path | None = None) -> dict:
@@ -102,7 +111,7 @@ def collect(lb, source: str, home: Path, build=chart.build, checked=None) -> dic
             continue
         tool = {"name": c.name, "tier": c.tier, "detected": c.id in found,
                 "rule": rule or ("missing" if rule_states else "unknown"), "method": rules.global_method(c.id, home),
-                "mcp": mcp, "projects": projects}
+                "mcp": mcp, "projects": projects, "hooks": hooks_seen(c.id)}
         active_projects = [p for p in projects if p["method"] != "none" or p["mcp"] == "registered"]
         tool["scope"] = [s for s, on in (("global", tool["rule"] not in ("missing", "unknown")
                                           or mcp["state"] == "registered"), ("project", bool(active_projects))) if on]
@@ -170,7 +179,8 @@ def render_text(s: dict) -> str:
             m = t["mcp"]
             mcp = m["state"] + (f" ({m['detail']})" if m.get("detail") else "")
             method = f" ({t['method']})" if t.get("method") not in (None, "none") else ""
-            lines.append(f"  {t['name']:<{width}}  {t['tier']:<9}  rule {t['rule']}{method} · MCP {mcp}"
+            hooks = f" · hooks {t['hooks'][:10]}" if t.get("hooks") else " · hooks never ran"
+            lines.append(f"  {t['name']:<{width}}  {t['tier']:<9}  rule {t['rule']}{method} · MCP {mcp}{hooks}"
                          + ("" if t["detected"] else " · not on PATH"))
             for p in t.get("projects", []):
                 lines.append(f"  {'':<{width}}  in {p['project']}: rule {p['rule']} ({p['method']}) · MCP {p['mcp']}")

@@ -499,7 +499,9 @@ class NowBehind(ChartEnv):
         spec = (Path(__file__).resolve().parents[1] / "docs" / "LOGBOOK-SPEC.md").read_text(encoding="utf-8")
         self.assertIn(r"written as `\u003c`, `\u003e`, `\u0026`, `\u2028` and `\u2029`", spec)
         self.assertFalse({"\u2028", "\u2029"} & set(spec))
-        self.assertIn("# Logbook Spec, v1.2", spec)
+        self.assertIn("# Logbook Spec, v1.3", spec)
+        self.assertIn("### 7.2 Hooks (v1.3, additive)", spec)
+        self.assertIn("[hooks]", spec)
         self.assertIn("`now_behind` (v1.2) is true", spec)
         self.assertIn("### 8.3 Now fields written by `log_watch` (v1.2)", spec)
 
@@ -555,13 +557,13 @@ class Rules(Env):
 
 
 class Cli(unittest.TestCase):
-    def test_version_names_spec_1_2(self):
+    def test_version_names_spec_1_3(self):
         from waypoint import status
         out = io.StringIO()
         with redirect_stdout(out), self.assertRaises(SystemExit):
             cli.main(["--version"])
-        self.assertIn("(logbook spec v1.2)", out.getvalue())
-        self.assertEqual(status.SPEC, "1.2")
+        self.assertIn("(logbook spec v1.3)", out.getvalue())
+        self.assertEqual(status.SPEC, "1.3")
 
     def test_fix_summary_pluralization(self):
         expected = {

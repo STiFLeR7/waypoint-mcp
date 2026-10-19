@@ -42,8 +42,11 @@ def main():
         for d in (home, code / "alpha", elsewhere):
             d.mkdir(parents=True)
         out = run(exe["waypoint"], "--version", cwd=elsewhere)
-        assert "(logbook spec v1.2)" in out, out
+        assert "(logbook spec v1.3)" in out, out
         run(exe["waypoint-mcp"], "--help", cwd=elsewhere)
+        h = subprocess.run([exe["waypoint"], "hook", "stop", "--tool", "claude-code"], input="not json", cwd=elsewhere,
+                           capture_output=True, text=True, timeout=120)
+        assert (h.returncode, h.stdout) == (0, ""), h  # a hook never fails its tool
         run(exe["waypoint"], "setup", "--yes", "--logbook", str(lb), "--root", str(code), "--no-mcp", "--home", str(home),
             cwd=elsewhere)
         assert (lb / "projects" / "_template.md").exists()

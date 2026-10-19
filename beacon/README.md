@@ -11,6 +11,7 @@ The contract is [LOGBOOK-SPEC §8](../docs/LOGBOOK-SPEC.md#8-remote-access-contr
 | Tool | Kind | What it returns or does |
 |---|---|---|
 | `take_fix` | read-only | KPIs, plus for each tracked project: name, status, idle, last_tool, unlogged, now_behind, summary, next. |
+| `show_chart` | read-only | The `take_fix` fields as a card inside ChatGPT and Claude (MCP Apps); Summary and Next are cut to 300 characters. |
 | `read_chart(project)` | read-only | One project's name, status, idle, last_tool, unlogged, updated, now_behind, summary, done, next, and its 10 newest log entries. The result labels the log's source. |
 | `log_watch(project, summary, tool?, date?, done?, next?)` | write | Adds one `### YYYY-MM-DD — <tool>` entry directly below `## Log` (known tool id; defaults to `chatgpt`), with every line of `summary` quoted with `> `. With `done`/`next`, also sets those lines and `- Updated:` in `## Now` in the same commit. |
 
@@ -46,10 +47,12 @@ The contract is [LOGBOOK-SPEC §8](../docs/LOGBOOK-SPEC.md#8-remote-access-contr
 ```
 src/index.ts    OAuthProvider wiring (the only file that imports the library at runtime)
 src/auth.ts     consent page -> GitHub sign-in -> allowlist -> grant
-src/mcp.ts      stateless Streamable-HTTP JSON-RPC (adapted from port) and the three tools
+src/mcp.ts      stateless Streamable-HTTP JSON-RPC (adapted from port) the four tools and the chart card resource
 src/logbook.ts  GitHub contents API, the log grammar, insertion and retries
 test/           node --test suites with a fake GitHub
 ```
+
+After a deploy that bumps the view URI, press **Refresh** on the ChatGPT connector.
 
 ## Develop
 

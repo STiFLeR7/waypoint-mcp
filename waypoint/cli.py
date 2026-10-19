@@ -426,6 +426,8 @@ def _repos(paths):
 
 def cmd_connect(a):
     c = clis.CLIS[a.cli]
+    if a.plugin and c.tier == "snippet":
+        sys.exit("waypoint: --plugin is available for wired CLIs only.")
     if c.tier == "snippet":
         if a.project:
             sys.exit(f"waypoint: {c.name} isn't wired automatically, globally or per project; "
@@ -435,11 +437,29 @@ def cmd_connect(a):
         return
     if (a.copy or a.allow_tracked) and not a.project:
         sys.exit("waypoint: --copy and --allow-tracked work with --project only.")
+    if a.plugin and a.project:
+        sys.exit("waypoint: --plugin is user-wide; it can't be combined with --project.")
     lb, home, repos = _logbook(a.logbook), _home(a), _repos(a.project)
     served, source = config.find_logbook(None)  # what `waypoint mcp` (no flags) will open
-    if not a.no_mcp and rules._real_home(home) and served.resolve() != lb:
+    if (a.plugin or not a.no_mcp) and rules._real_home(home) and served.resolve() != lb:
         sys.exit(f"waypoint: the MCP server would open {served.resolve()} (from {source}), not {lb}. "
-                 f"Make {lb} the default first (waypoint setup --logbook {lb}), or pass --no-mcp.")
+                 f"Make {lb} the default first (waypoint setup --logbook {lb})"
+                 + (": the plugin starts `waypoint mcp`, which opens the default logbook." if a.plugin
+                    else ", or pass --no-mcp."))
+    if a.plugin:
+        print(f"Preparing {c.name} for the Waypoint plugin: the rule, and no separate MCP entry.\n")
+        plan = rules.plan_install(home, lb, tools=(c.id,), mcp=False, writable_root=not a.no_writable_root) \
+            + [rules._plan_mcp(c.id, home, register=False)]
+        ok = run_plan(plan, a.yes)
+        entries, _ = clis.mcp_entries(clis.mcp_file(c.id, home))
+        other = (entries or {}).get("waypoint")
+        if ok and other is not None and not clis.is_ours(other):
+            print(f"\nNote: `waypoint` in {c.name} is another server ({clis.describe(other)}), and the plugin's server "
+                  "is also named `waypoint`. Copilot CLI lets the plugin's copy win (hiding that server); Gemini CLI "
+                  "keeps yours (hiding the plugin's). If that matters, rename one of them in that tool's MCP settings.")
+        if ok:
+            print("\n" + clis.plugin_text(c.id))
+        sys.exit(0 if ok else 1)
     where = ("in " + ", ".join(r.name for r in repos)) if repos else "for every project (global)"
     print(f"Wiring {c.name} ({c.tier}) {where}: the rule" + ("" if a.no_mcp else " and the local MCP server (waypoint mcp)")
           + ".\n")
@@ -574,7 +594,7 @@ def cmd_menu(a):
 
 def main(argv=None):
     p = argparse.ArgumentParser(prog="waypoint", description="Every voyage (project), every navigator (AI tool), one chart.")
-    p.add_argument("--version", action="version", version=f"waypoint {__version__} (logbook spec v1.2)")
+    p.add_argument("--version", action="version", version=f"waypoint {__version__} (logbook spec v1.3)")
     sub = p.add_subparsers(dest="cmd", required=True)
     lb_help = "logbook folder (default: WAYPOINT_LOGBOOK, then the one `setup` remembered, then the current folder)"
 
@@ -637,6 +657,9 @@ def main(argv=None):
     c.add_argument("cli", choices=list(clis.CLIS), help="the AI CLI, by its tool id")
     c.add_argument("--logbook", help=lb_help)
     c.add_argument("--no-mcp", action="store_true", help="install the rule only")
+    c.add_argument("--plugin", action="store_true",
+                   help="you'll use the Waypoint plugin: install the rule, remove Waypoint's own MCP entry (the plugin "
+                        "brings it) and print the plugin install commands")
     c.add_argument("--no-writable-root", action="store_true", help="Codex: don't add the logbook to its sandbox's writable_roots")
     c.add_argument("--project", action="append", default=[], metavar="REPO",
                    help="wire this repo only (repeatable): the rule in the repo and an MCP entry scoped to it")
@@ -669,6 +692,8 @@ def main(argv=None):
     m = sub.add_parser("mcp", help="run the local MCP server (stdio) for AI tools", add_help=False)
     m.set_defaults(func=None)
 
+    sub.add_parser("hook", help="run by an AI CLI as a hook (the Waypoint plugin sets this up)", add_help=False)
+
     i = sub.add_parser("init", help="scaffold a logbook (setup does this for you)")
     i.add_argument("dir", help="folder for the new logbook")
     i.add_argument("--refresh-rules", action="store_true", help="replace an existing GLOBAL-RULES.md")
@@ -678,6 +703,9 @@ def main(argv=None):
     if argv[:1] == ["mcp"]:  # its own parser: the server owns stdout, so no extra output here
         from . import mcp
         return mcp.main(argv[1:])
+    if argv[:1] == ["hook"]:  # its own parser: a hook always exits 0 and prints only its JSON
+        from . import hook
+        return hook.main(argv[1:])
     a = p.parse_args(argv) if argv else argparse.Namespace(func=cmd_menu, home=None)  # `waypoint` alone
     if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
         sys.stdout.reconfigure(encoding="utf-8")  # Windows consoles: keep ✓ and — printable

@@ -65,6 +65,22 @@ CLIS = {c.id: c for c in (
 )}
 WIRED = [c for c in CLIS.values() if c.tier != "snippet"]
 
+PLUGIN_REPO = "STiFLeR7/waypoint-mcp"
+PLUGIN_STEPS = {  # spec B.2; the user runs these (network, trust prompts), Waypoint never does
+    "claude-code": (f"claude plugin marketplace add {PLUGIN_REPO}", "claude plugin install waypoint@waypoint-mcp"),
+    "codex": (f"codex plugin marketplace add {PLUGIN_REPO}", "codex plugin add waypoint@waypoint-mcp",
+              "then in Codex: /hooks, and trust Waypoint's two hooks (again after each plugin update)"),
+    "copilot-cli": (f"copilot plugin install {PLUGIN_REPO}",),
+    "gemini-cli": (f"gemini extensions install https://github.com/{PLUGIN_REPO}",),
+}
+
+
+def plugin_text(cli_id):
+    c = CLIS[cli_id]
+    steps = "\n".join(f"  {s}" for s in PLUGIN_STEPS[cli_id])
+    return (f"Now install the Waypoint plugin for {c.name} (it brings the hooks and the MCP server):\n{steps}\n"
+            "The hooks run `waypoint`, so keep it on PATH.")
+
 
 def config_dir(cli_id, home: Path) -> Path:
     if cli_id == "claude-code":

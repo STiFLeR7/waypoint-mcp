@@ -1,4 +1,4 @@
-"""`waypoint mcp`: the local MCP server over stdio (LOGBOOK-SPEC §8.2; MCP 2025-06-18, stdlib only).
+"""`waypoint mcp`: the local MCP server over stdio (LOGBOOK-SPEC §8.2; MCP 2026-07-28 and older, stdlib only).
 
 One process serves one client and one logbook. stdout carries protocol messages only (one JSON object per line);
 anything else goes to stderr. The chart is built fresh on every call from the local logbook and tool history.
@@ -14,7 +14,12 @@ from . import __version__, chart, config, watch
 from . import status as status_mod
 from .logbook import KNOWN_TOOLS
 
-PROTOCOL = "2025-06-18"
+MODERN = ("2026-07-28",)  # stateless: version and client capabilities ride in every request's _meta
+LEGACY = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")  # through initialize
+_PV, _CAPS = "io.modelcontextprotocol/protocolVersion", "io.modelcontextprotocol/clientCapabilities"
+_INFO = "io.modelcontextprotocol/serverInfo"
+_CACHE = {"ttlMs": 3_600_000, "cacheScope": "public"}  # the tool list is static per release and holds no user data
+CAPABILITIES = {"tools": {"listChanged": False}, "prompts": {"listChanged": False}}
 MAX_LINE = 64 * 1024
 MAX_REPLY = 256 * 1024
 CALL_SECONDS = 10.0
@@ -73,6 +78,25 @@ TOOLS = [
                     "tool's rule and MCP registration, and problems with the command that fixes each. Read-only.",
      "inputSchema": _obj(), "annotations": {"title": "Waypoint status", **_READ}},
 ]
+
+PROMPTS = {  # LOGBOOK-SPEC §8.2 v1.3: static text, never logbook data; no required arguments (clients split on spaces)
+    "where_am_i": {
+        "title": "Where am I?", "arguments": [],
+        "description": "Status of every tracked project: what needs attention first, then each active project's Next.",
+        "text": ("Call the Waypoint take_fix tool. Lead with what needs attention: projects whose Now is behind the log, "
+                 "unlogged watches and stale projects. Then list the active projects' Next lines. Keep it short."),
+    },
+    "log_this": {
+        "title": "Log this work",
+        "description": "Add one log entry for the meaningful work done in this conversation.",
+        "arguments": [{"name": "project", "required": False,
+                       "description": "Exact project name (optional: otherwise the one for the working folder)"}],
+        "text": ("Add one log entry for the meaningful work done in this conversation with the Waypoint log_watch tool: "
+                 "1-3 short lines, your own tool id, and done/next if they changed. If no project was named, call "
+                 "take_fix and pick the project whose name matches the working folder; ask if unsure. If nothing meaningful was done, "
+                 "say so and don't log."),
+    },
+}
 
 
 class ToolError(Exception):
@@ -158,7 +182,6 @@ class Server:
                  source: str = ""):
         self.lb, self.problem, self.home, self.source = logbook, problem, home or Path.home(), source
         self.attention = config.load(logbook).mcp_attention if logbook else False
-        self.initialized = False
 
     # ---- tools ----
 
@@ -275,19 +298,46 @@ class Server:
             return _err(msg.get("id") if isinstance(msg, dict) else None, -32600, "Invalid Request")
         method, mid = msg["method"], msg.get("id")
         if "id" not in msg:
-            if method == "notifications/initialized":
-                self.initialized = True
             return None if method.startswith("notifications/") else _err(None, -32600, "Invalid Request: a request needs an id")
         if isinstance(mid, bool) or not isinstance(mid, (str, int)):
             return _err(None, -32600, "Invalid Request: id must be a string or an integer")
         params = msg.get("params") if isinstance(msg.get("params"), dict) else {}
+        meta = params.get("_meta") if isinstance(params.get("_meta"), dict) else {}
+        if _PV in meta:  # a 2026-07-28 request (no handshake): check it on its own
+            if meta[_PV] not in MODERN:
+                return _err(mid, -32022, "Unsupported protocol version",
+                            {"supported": [*MODERN, *LEGACY], "requested": str(meta[_PV])[:64]})
+            if not isinstance(meta.get(_CAPS), dict):
+                return _err(mid, -32602, "Invalid params: _meta needs io.modelcontextprotocol/clientCapabilities")
+            if method == "initialize":
+                return _err(mid, -32601, "Method not found: initialize (2026-07-28 uses server/discover)")
+        if method == "server/discover":  # either era: a dual-era client probes with it before falling back
+            return _ok(mid, {"supportedVersions": list(MODERN), "capabilities": CAPABILITIES,
+                             "instructions": INSTRUCTIONS, **_CACHE})
         if method == "initialize":
-            return _ok(mid, {"protocolVersion": PROTOCOL, "capabilities": {"tools": {"listChanged": False}},
+            asked = params.get("protocolVersion")
+            return _ok(mid, {"protocolVersion": asked if isinstance(asked, str) and asked in LEGACY else LEGACY[0],
+                             "capabilities": CAPABILITIES,
                              "serverInfo": {"name": "waypoint", "version": __version__}, "instructions": INSTRUCTIONS})
         if method == "ping":
             return _ok(mid, {})
         if method == "tools/list":
-            return _ok(mid, {"tools": TOOLS})
+            return _ok(mid, {"tools": TOOLS, **_CACHE})
+        if method == "prompts/list":
+            return _ok(mid, {"prompts": [{"name": n, "title": p["title"], "description": p["description"],
+                                          "arguments": p["arguments"]} for n, p in PROMPTS.items()], **_CACHE})
+        if method == "prompts/get":
+            name, args = params.get("name"), params.get("arguments")
+            args = {} if args is None else args  # absent or null: no arguments
+            p = PROMPTS.get(name) if isinstance(name, str) else None
+            if p is None:
+                return _err(mid, -32602, f"Unknown prompt: {str(name)[:64]}")
+            if not isinstance(args, dict) or any(not isinstance(v, str) for v in args.values()):
+                return _err(mid, -32602, "Prompt arguments must be strings")
+            project = "".join(c for c in " ".join(args.get("project", "").split()) if c.isprintable())[:200]
+            text = p["text"] + (f' The project is "{project}".' if project and name == "log_this" else "")
+            return _ok(mid, {"description": p["description"],
+                             "messages": [{"role": "user", "content": {"type": "text", "text": text}}]})
         if method == "tools/call":
             name = params.get("name")
             if not isinstance(name, str):
@@ -304,12 +354,14 @@ def _text(value, is_error=False):
 
 
 def _ok(mid, result):
-    return {"jsonrpc": "2.0", "id": mid, "result": result}
+    return {"jsonrpc": "2.0", "id": mid,
+            "result": {"resultType": "complete", **result,
+                       "_meta": {**result.get("_meta", {}), _INFO: {"name": "waypoint", "version": __version__}}}}
 
 
-def _err(mid, code, message):
+def _err(mid, code, message, data=None):
     return {"jsonrpc": "2.0", "id": mid if isinstance(mid, (str, int)) and not isinstance(mid, bool) else None,
-            "error": {"code": code, "message": message}}
+            "error": {"code": code, "message": message, **({"data": data} if data is not None else {})}}
 
 
 def encode(reply):
@@ -339,7 +391,7 @@ def serve(server: Server, stdin=None, stdout=None):
             except (UnicodeDecodeError, ValueError):
                 reply = _err(None, -32700, "Parse error")
             else:
-                reply = _err(None, -32600, "Batches are not supported (protocol 2025-06-18)") if isinstance(msg, list) \
+                reply = _err(None, -32600, "Batches are not part of MCP; send one message per line") if isinstance(msg, list) \
                     else server.handle(msg)
         if reply is not None:
             stdout.write(encode(reply))

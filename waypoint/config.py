@@ -21,6 +21,9 @@ class Config:
     pulse_days: int = 35
     feed_max: int = 60
     mcp_attention: bool = False  # [mcp] include_attention: Attention lines in local MCP results (§8.2)
+    hook_context: bool = True  # [hooks] context: session-start prints the project's Now (§6 v1.3)
+    hook_nudge: bool = True  # [hooks] nudge: stop may ask once per session for a log entry
+    hook_quiet: tuple[str, ...] = ()  # [hooks] quiet: project names that are never nudged
 
 
 def load(logbook: Path) -> Config:
@@ -51,6 +54,17 @@ def load(logbook: Path) -> Config:
     if not isinstance(mcp, dict) or ("include_attention" in mcp and not isinstance(mcp["include_attention"], bool)):
         raise ConfigError(f"{f}: mcp.include_attention must be true or false")
     cfg.mcp_attention = mcp.get("include_attention") is True
+    hooks = data.get("hooks", {})
+    if not isinstance(hooks, dict) or set(hooks) - {"context", "nudge", "quiet"}:
+        raise ConfigError(f"{f}: [hooks] may contain only context, nudge and quiet")
+    for k in ("context", "nudge"):
+        if k in hooks and not isinstance(hooks[k], bool):
+            raise ConfigError(f"{f}: hooks.{k} must be true or false")
+        setattr(cfg, f"hook_{k}", hooks.get(k, True))
+    quiet = hooks.get("quiet", [])
+    if not isinstance(quiet, list) or any(not isinstance(q, str) for q in quiet):
+        raise ConfigError(f"{f}: hooks.quiet must be a list of project names")
+    cfg.hook_quiet = tuple(quiet)
     return cfg
 
 

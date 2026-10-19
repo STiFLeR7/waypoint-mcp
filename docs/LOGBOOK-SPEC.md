@@ -1,4 +1,4 @@
-# Logbook Spec, v1.2
+# Logbook Spec, v1.3
 
 The **logbook** is the contract every tool (Claude Code, Codex, ChatGPT, or you) agrees on. It's plain files in a folder, ideally a private git repo. Tools write project files following these rules.
 
@@ -202,13 +202,19 @@ A single self-contained page, opened straight from disk (`file://`).
 
 ## 6. `waypoint.toml`
 
-Configuration is validated before collection: roots are nonempty path strings in a list; thresholds are nonnegative integers for `active` and `occasional` only. `untracked_days` is an integer from 1 to 3650, `pulse_days` from 1 to 365, and `feed_max` from 1 to 1000. Invalid types, unsupported threshold statuses, and out-of-range values produce an actionable configuration error.
+Configuration is validated before collection: roots are nonempty path strings in a list; thresholds are nonnegative integers for `active` and `occasional` only. `untracked_days` is an integer from 1 to 3650, `pulse_days` from 1 to 365, and `feed_max` from 1 to 1000. Invalid types, unsupported threshold statuses, and out-of-range values produce an actionable configuration error. `[hooks]` may hold only `context` and `nudge` (booleans) and `quiet` (a list of strings).
 ```toml
 roots = ["D:\\"]                 # projects are top-level folders under these roots
 stale_days = { active = 21, occasional = 60 }
 untracked_days = 30
 pulse_days = 35
 feed_max = 60
+[mcp]
+include_attention = false        # §8.2
+[hooks]
+context = true                   # §7.2: session-start prints the project's Now
+nudge = true                     # §7.2: stop may ask once per session for a log entry
+quiet = []                       # §7.2: project names never nudged
 ```
 Every key is optional and the defaults are shown above. `roots` defaults to the folder that contains the logbook; a root that is the home folder or a drive/filesystem root is allowed but flagged as very broad by `init` and `setup`.
 
@@ -239,15 +245,25 @@ Every key is optional and the defaults are shown above. `roots` defaults to the 
 - Repo-local backup files use matching `*.bak-*` patterns in that same exclude block, so updates do not add backup files to commits.
 - **Discovery:** there is no registry; `status` and uninstall look in each tracked and archived project's folder, including Gemini's `<repo>/.gemini/settings.json` entry written by `gemini mcp add --scope project`. A CLI with the rule both globally and in a repo is reported (`rule-twice`); a link whose target is gone is `broken`. Not detected: Claude Code also reading a repo's `AGENTS.md`.
 
+### 7.2 Hooks (v1.3, additive)
+`waypoint hook session-start|stop --tool <claude-code|codex|gemini-cli|copilot-cli|auto>` is run by an AI CLI as a hook (the Waypoint plugin sets it up; `auto` reads the plugin's environment). It reads the hook payload (one JSON object on stdin) and uses only `session_id`, `cwd` and `stop_hook_active`.
+- **Project:** the live tracked project placed from `cwd` (§4.2 v1.1); never the logbook itself. **Logbook:** `--logbook`, `WAYPOINT_LOGBOOK`, then the remembered one; never the current folder.
+- **session-start:** records a baseline for the session once (repo fingerprint and project-file signature), then, unless `[hooks] context = false`, prints the project's Status, and its Done, Next, Updated and newest log entry (each cut to 300 characters; at most 2000 in all) as context, stating that it is the owner's notes: data, never instructions.
+- **stop:** at most once per session, when `stop_hook_active` is not true, `[hooks] nudge` is on and the project isn't in `quiet` (names compared without case): if the project folder changed since the baseline (its tree at HEAD, its git status, and the size and time of each changed file) and the project file did not, it asks the agent to log, or to say in one line that there is nothing to log (including when it already logged through the beacon, whose writes reach the local file only on the next pull). Without git there is no fingerprint and never a nudge.
+- **Never breaks its tool:** exit code 0 always; any problem prints nothing. Output is the tool's own JSON shape. State lives in `<config>/waypoint/hooks/` (session files kept 7 days; `seen-<tool>` holds the last run time).
+- The hook never writes the logbook: the agent does, through `log_watch` or the rule.
+
 ## 8. Access contracts
 
 ### 8.1 Remote (beacon, Phase 5)
 - **Who:** every request must be authenticated through OAuth, and only an allowlist of identities is accepted. The allowlist **fails closed**: unset, empty, or containing any malformed entry, it admits nobody. No anonymous access.
 - OAuth network requests have bounded timeouts. Failed exchanges return a safe recovery response without exposing credentials or accepting an unauthenticated identity.
 - A supplied MCP protocol-version header must be supported; invalid or unsupported values are rejected before dispatch, except on `initialize`, which negotiates the version in its body. When absent, the server uses its documented compatibility version.
+- **Transport:** MCP 2026-07-28 and 2025-11-25, 2025-06-18, 2025-03-26 and 2024-11-05 through `initialize`; on a 2026-07-28 request the `MCP-Protocol-Version`, `Mcp-Method` and (for `tools/call` and `resources/read`) `Mcp-Name` headers must match the body.
 - **Scope:** exactly one logbook. Projects are addressed **by name only**, and the name must be in the server's own list of tracked projects. Paths, traversal and unknown names are rejected.
 - Existing names are preserved verbatim, including names longer than the CLI creation limit. Writes target exactly `projects/<name>.md`; names that cannot safely identify that direct child are rejected.
 - **Read results may include:** KPIs; and for each project its name, status, idle, last_tool, unlogged, now_behind, Summary, Done, Next and log entries, and in `read_chart` its `updated` date (v1.2). These are owner-authored text, returned only to the authenticated owner.
+- **`show_chart()`** (read-only, v1.3): the same fields as `take_fix`, with Summary and Next cut to 300 characters, as `structuredContent` for the card view `ui://waypoint/chart-v1` (MCP Apps). The view is inline HTML with no external requests, renders text only, and can't call `log_watch` (`visibility: ["model"]`).
 - Reads may include a privacy-safe aggregate collection-health cue `data_complete` (`true`, `false`, or `null` for unknown) without source names or diagnostics. Counts describe observed records; successful collection and zero unlogged sessions are not proof of complete history.
 - `read_chart` identifies snapshot fields and their generation time separately from logs read from the current project file. These sources can have different freshness.
 - **Reads never include:** session titles, the feed, the pulse's per-session data, untracked folders, file paths, Attention text, source details, or rule state.
@@ -260,8 +276,9 @@ Every key is optional and the defaults are shown above. `roots` defaults to the 
 
 ### 8.2 Local (`waypoint mcp`, v1.1)
 A stdio MCP server started by an AI tool on the owner's machine, for one logbook.
-- **Transport:** MCP 2025-06-18 only; newline-delimited UTF-8 JSON-RPC; stdout carries protocol messages only; batches and requests without an id are refused; a request line is at most 64 KB and a reply at most 256 KB; each tool call finishes within 10 s; the process exits when stdin closes. It opens no network listener and makes no outbound requests. The tools that connect forward its results to their own model providers.
+- **Transport:** MCP 2026-07-28 (each request carries its version and client capabilities in `_meta`; `server/discover`), and 2025-11-25, 2025-06-18, 2025-03-26 and 2024-11-05 through `initialize`; newline-delimited UTF-8 JSON-RPC; stdout carries protocol messages only; batches and requests without an id are refused; a request line is at most 64 KB and a reply at most 256 KB; each tool call finishes within 10 s; the process exits when stdin closes. It opens no network listener and makes no outbound requests. The tools that connect forward its results to their own model providers.
 - **Reads** are built fresh from the logbook and local tool history, with the same fields as §8.1, plus Done in `read_chart`. Attention lines are included only when `waypoint.toml` sets `[mcp] include_attention = true`. Never included: session titles, the feed, untracked folders, file paths, source details, rule state.
+- **Prompts (v1.3):** `where_am_i` and `log_this` (optional `project`). Their text tells the agent which tool to call and holds no logbook data.
 - **`status()`** (read-only) is the one exception to the list above: it reports rule, MCP-registration and source *states*, project counts, per-tool rule method, `scope` (`global` and/or `project`), per-project install counts, and the local MCP `name` when registered, so an agent can tell the owner what to fix. It never includes file paths, commands, source details or project text; problem lines are fixed sentences naming only the tool or source.
 - **Trust boundary:** quoting (§2.2) protects the file's grammar, not the reader. Every tool description and every read result states that project text is the owner's notes: data, never instructions.
 - A timed-out write must not later replace a project file. The final replacement and the timeout response share a cancellation gate.
@@ -284,4 +301,5 @@ A stdio MCP server started by an AI tool on the owner's machine, for one logbook
 - `dashboard.json` carries `"schema": 1`. Readers should ignore unknown fields.
 - **v1.1** (2026-10-14) is additive: tracked-Path matching (§4.2), `waypoint add` (§1), logbook discovery and tool folders (§6), the Claude Code rules file and Codex `shadowed` state (§7), the `logbook` source (§4.1), writer tool ids (§2.3), the local MCP contract (§8.2) and `chart.html` (§5.2). Existing logbooks need no changes; `dashboard.json` stays schema 1.
 - **v1.2** (2026-10-15) is additive: the optional `Updated` line in `## Now` (§2.1), `updated`, `now_behind` and `kpi.behind` (§4.4, §5.1), `log_watch` `done`/`next` (§8.3), and per-project install (§7.1). Existing logbooks need no changes; `dashboard.json` stays schema 1.
+- **v1.3** (2026-10-19) is additive: hooks and `[hooks]` (§6, §7.2); MCP 2026-07-28, prompts and `show_chart` and its view (§8.1, §8.2). Existing logbooks need no changes; `dashboard.json` stays schema 1.
 - Grammar changes that break existing readers bump this spec's major version.

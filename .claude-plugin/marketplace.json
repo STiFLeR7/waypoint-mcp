@@ -1,0 +1,7 @@
+{
+  "name": "waypoint-mcp",
+  "owner": {"name": "STiFLeR7"},
+  "plugins": [
+    {"name": "waypoint", "source": "./", "description": "Waypoint logbook for AI coding tools: Now at session start, a log reminder at the end, and the MCP server."}
+  ]
+}

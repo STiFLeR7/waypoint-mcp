@@ -1,0 +1,4 @@
+{"hooks": {
+  "SessionStart": [{"hooks": [{"type": "command", "command": "waypoint hook session-start --tool auto"}]}],
+  "Stop": [{"hooks": [{"type": "command", "command": "waypoint hook stop --tool auto"}]}]
+}}

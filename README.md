@@ -1,4 +1,5 @@
 # Waypoint
+<!-- mcp-name: io.github.STiFLeR7/waypoint-mcp -->
 
 **Waypoint keeps one project log across your AI coding tools, so you can see where work stopped and what comes next.**
 
@@ -67,6 +68,25 @@ Automatic session history (which project, which tool, when) comes from **Claude 
 - `waypoint rules` reports each tool's rule: in sync, drifted, missing, or shadowed (Codex reads an `AGENTS.override.md` instead).
 - **Known limits:** Claude Code deletes transcripts after 30 days by default. The Claude Code and Codex history formats are unofficial; the chart's source health says when a reader breaks.
 
+## The plugin: hooks that remind
+
+A rule asks the agent to log; the plugin's hooks remind it. At session start the agent sees the project's Now and newest log entry; at the end of a turn where the repo changed and the project file didn't, it's asked once to log (or to say there's nothing to log). The hooks only remind: the agent still writes the entry.
+
+Install Waypoint first (`pipx install waypoint-mcp`, so `waypoint` is on PATH), run `waypoint setup --no-mcp` (or, after `waypoint setup`, `waypoint connect <cli> --plugin`, which removes the separate MCP entry `setup` made), then:
+
+| CLI | Install |
+|---|---|
+| Claude Code | `claude plugin marketplace add STiFLeR7/waypoint-mcp` then `claude plugin install waypoint@waypoint-mcp` |
+| Codex | `codex plugin marketplace add STiFLeR7/waypoint-mcp`, `codex plugin add waypoint@waypoint-mcp`, then trust the hooks in `/hooks` (again after each update) |
+| Copilot CLI | `copilot plugin install STiFLeR7/waypoint-mcp` |
+| Gemini CLI | `gemini extensions install https://github.com/STiFLeR7/waypoint-mcp` |
+
+If you wrote Waypoint hooks into a tool's own settings by hand, remove them once the plugin is installed, or the reminder can fire twice.
+
+Under `--tool auto` the hook tells tools apart by the plugin environment (`GEMINI_SESSION_ID`, `COPILOT_PLUGIN_ROOT`, `PLUGIN_ROOT`, `CLAUDE_PLUGIN_ROOT`); don't set those globally.
+
+The plugin brings the MCP server too, so `waypoint connect <cli> --plugin` removes Waypoint's own separate MCP entry. `waypoint status` shows when each tool's hooks last ran. Turn parts off in `waypoint.toml`: `[hooks] context = false`, `nudge = false`, or `quiet = ["project"]`.
+
 ## Reading the chart
 
 | On the chart | Plain meaning |
@@ -108,7 +128,7 @@ They're never mixed: the engine ships, and the logbook stays yours.
 
 ## Raise the beacon
 
-ChatGPT keeps no local history and can't start a local server. The **beacon** (`beacon/`, advanced) is a remote MCP server you host on Cloudflare Workers behind GitHub OAuth, answering only to your GitHub account. `take_fix` and `read_chart` read the chart; `log_watch` appends one `chatgpt` log entry to the logbook repo. Setup takes a Cloudflare account, a GitHub OAuth app and a fine-grained token: [`beacon/README.md`](beacon/README.md). Without it, paste a ChatGPT summary into the project's file as a `chatgpt` entry.
+ChatGPT keeps no local history and can't start a local server. The **beacon** (`beacon/`, advanced) is a remote MCP server you host on Cloudflare Workers behind GitHub OAuth, answering only to your GitHub account. `take_fix` and `read_chart` read the chart, `show_chart` shows it as a card inside ChatGPT and Claude (MCP Apps); `log_watch` appends one `chatgpt` log entry to the logbook repo. Setup takes a Cloudflare account, a GitHub OAuth app and a fine-grained token: [`beacon/README.md`](beacon/README.md). Without it, paste a ChatGPT summary into the project's file as a `chatgpt` entry.
 
 ## Spec
 

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.0 — "Ship's bell"
+
+- The Waypoint plugin: one repo installs Waypoint's hooks and MCP server in Claude Code, Codex and Copilot CLI (plugin) and Gemini CLI (extension). `waypoint connect <cli> --plugin` prepares a machine for it; `waypoint status` shows when hooks last ran.
+- `waypoint hook session-start|stop --tool <id>`: run by an AI CLI as a hook. At session start the agent sees the project's Now and newest log entry; at a turn end it is asked once per session for a log entry when the repo changed and the project file didn't. Never fails its tool. `[hooks]` in `waypoint.toml` turns either part off or quiets projects. Logbook spec v1.3.
+- MCP 2026-07-28: the local server and the beacon answer `server/discover` and stateless requests, and still serve every older client. The local server adds two prompts, `where_am_i` and `log_this` (slash commands in Claude Code and Gemini CLI).
+- Listed in the official MCP Registry as `io.github.STiFLeR7/waypoint-mcp` (published by the release workflow).
+- The beacon's `show_chart` shows the chart as a card inside ChatGPT and Claude (MCP Apps). `log_watch` can't be called from a card.
+
 ## 0.3.0 — "Fitting out"
 
 - Screen: Backspace goes back (as ←), except while typing a search.

@@ -1,11 +1,13 @@
 """`waypoint status` (spec Part A): read-only, never crashes on a half-set-up machine."""
 import io
 import json
+import os
 import shutil
 import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from unittest import mock
 from unittest.mock import patch
 
 from waypoint import cli, project, rules, status
@@ -119,6 +121,20 @@ class Status(unittest.TestCase):
         with redirect_stdout(out):
             cli.main(["status", "--logbook", str(self.lb), "--home", str(self.home)])
         self.assertIn("Logbook", out.getvalue())
+
+    def test_status_shows_when_hooks_last_ran(self):
+        from waypoint import clis, hook
+        cfg = self.home.parent / "cfg"
+        with mock.patch.dict(os.environ, {"APPDATA": str(cfg), "XDG_CONFIG_HOME": str(cfg)}), \
+                mock.patch.object(clis, "detected", return_value=["codex", "claude-code"]):
+            hook.mark_seen("codex")
+            s = self.collect()
+            self.assertRegex(s["tools"]["codex"]["hooks"], r"^\d{4}-\d{2}-\d{2}T")
+            self.assertIsNone(s["tools"]["claude-code"]["hooks"])
+            text = status.render_text(s)
+        self.assertRegex(text, r"Codex .*· hooks \d{4}-\d{2}-\d{2}")
+        self.assertRegex(text, r"Claude Code .*· hooks never ran")
+        self.assertFalse([p for p in s["problems"] if "hook" in p["id"]])
 
     def test_waypoint_local_counts_as_registered(self):
         (self.home / ".codex" / "config.toml").write_text(

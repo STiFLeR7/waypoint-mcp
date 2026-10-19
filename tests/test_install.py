@@ -434,6 +434,60 @@ class Connect(Base):
         from waypoint import clis
         self.assertTrue(set(clis.CLIS) <= set(logbook.KNOWN_TOOLS))
 
+class PluginConnect(Base):
+    def test_plugin_text_names_every_install_step(self):
+        from waypoint import clis
+        self.assertEqual(set(clis.PLUGIN_STEPS), {"claude-code", "codex", "gemini-cli", "copilot-cli"})
+        self.assertIn("claude plugin install waypoint@waypoint-mcp", clis.plugin_text("claude-code"))
+        self.assertIn("/hooks", clis.plugin_text("codex"))  # Codex runs plugin hooks only once trusted
+        self.assertIn("gemini extensions install https://github.com/STiFLeR7/waypoint-mcp", clis.plugin_text("gemini-cli"))
+        self.assertIn("copilot plugin install STiFLeR7/waypoint-mcp", clis.plugin_text("copilot-cli"))
+
+    def test_plugin_with_project_is_refused(self):
+        self.init()
+        code, out = self.run_cli("connect", "claude-code", "--plugin", "--project", str(self.root / "alpha"), "--yes",
+                                 "--logbook", str(self.lb), "--home", str(self.home))
+        self.assertEqual(code, 1)
+        self.assertIn("--plugin is user-wide", out)
+        self.assertFalse((self.root / "alpha" / ".claude").exists())
+
+    def test_plugin_installs_the_rule_and_prints_the_steps(self):
+        self.init()
+        code, out = self.run_cli("connect", "codex", "--plugin", "--yes", "--logbook", str(self.lb), "--home", str(self.home))
+        self.assertEqual(code, 0, out)
+        self.assertIn("codex plugin add waypoint@waypoint-mcp", out)
+        self.assertIn(rules.render(self.lb).splitlines()[0],
+                      (self.home / ".codex" / "AGENTS.md").read_text(encoding="utf-8"))
+
+    def test_plugin_wrong_default_logbook_names_the_plugin_not_no_mcp(self):
+        self.init()
+        with mock.patch.object(rules, "_real_home", lambda home: True):
+            code, out = self.run_cli("connect", "codex", "--plugin", "--yes", "--logbook", str(self.lb),
+                                     "--home", str(self.home))
+        self.assertEqual(code, 1)
+        self.assertIn("the plugin starts `waypoint mcp`", out)
+        self.assertNotIn("--no-mcp", out)
+
+    def test_plugin_warns_when_waypoint_is_another_server(self):
+        self.init()
+        (self.home / ".codex" / "config.toml").write_text('[mcp_servers.waypoint]\nurl = "https://example.invalid/mcp"\n',
+                                                           encoding="utf-8")
+        code, out = self.run_cli("connect", "codex", "--plugin", "--yes", "--logbook", str(self.lb), "--home", str(self.home))
+        self.assertEqual(code, 0, out)
+        self.assertIn("is another server", out)
+        self.assertIn("example.invalid", (self.home / ".codex" / "config.toml").read_text(encoding="utf-8"))
+        code, out = self.run_cli("connect", "claude-code", "--plugin", "--yes", "--logbook", str(self.lb),
+                                 "--home", str(self.home))
+        self.assertNotIn("is another server", out)
+
+    def test_plugin_plan_asks_only_to_unregister(self):
+        self.init()
+        with mock.patch.object(rules, "_plan_mcp", wraps=rules._plan_mcp) as spy:
+            code, out = self.run_cli("connect", "claude-code", "--plugin", "--yes", "--logbook", str(self.lb),
+                                     "--home", str(self.home))
+        self.assertEqual(code, 0, out)
+        spy.assert_called_once_with("claude-code", self.home.resolve(), register=False)
+
 
 if __name__ == "__main__":
     unittest.main()

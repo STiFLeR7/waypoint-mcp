@@ -25,7 +25,7 @@ describe("mcp protocol", () => {
 
   test("an unsupported client version falls back to the latest supported", async () => {
     const j = await (await rpc({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "1999-01-01" } })).json();
-    assert.equal(j.result.protocolVersion, "2025-06-18");
+    assert.equal(j.result.protocolVersion, "2025-11-25");
   });
 
   test("rejects invalid or unsupported MCP protocol headers before dispatch", async () => {
@@ -47,7 +47,7 @@ describe("mcp protocol", () => {
       { headers: { "content-type": "application/json", "mcp-protocol-version": "2099-01-01" } },
     );
     assert.equal(res.status, 200);
-    assert.equal((await res.json()).result.protocolVersion, "2025-06-18");
+    assert.equal((await res.json()).result.protocolVersion, "2025-11-25");
   });
 
   test("accepts a supported MCP protocol header", async () => {
@@ -56,7 +56,127 @@ describe("mcp protocol", () => {
       { headers: { "content-type": "application/json", "mcp-protocol-version": "2025-06-18" } },
     );
     assert.equal(res.status, 200);
-    assert.deepEqual((await res.json()).result, {});
+    assert.equal((await res.json()).result.resultType, "complete");
+  });
+
+  const PV = "io.modelcontextprotocol/protocolVersion";
+  const CAPS = "io.modelcontextprotocol/clientCapabilities";
+  const modernBody = (id: number, method: string, params: Record<string, unknown> = {}, version = "2026-07-28") => ({
+    jsonrpc: "2.0", id, method, params: { ...params, _meta: { [PV]: version, [CAPS]: {} } },
+  });
+  const modernHeaders = (method: string, name?: string, version = "2026-07-28") => ({
+    headers: {
+      "content-type": "application/json", "mcp-protocol-version": version, "mcp-method": method,
+      ...(name === undefined ? {} : { "mcp-name": name }),
+    },
+  });
+
+  describe("mcp 2026-07-28", () => {
+    test("server/discover answers with modern versions and cache hints", async () => {
+      const res = await client(standardRepo().gh).rpc(modernBody(1, "server/discover"), modernHeaders("server/discover"));
+      const j = await res.json();
+      assert.equal(res.status, 200);
+      assert.deepEqual(j.result.supportedVersions, ["2026-07-28"]);
+      assert.equal(j.result.resultType, "complete");
+      assert.equal(j.result.ttlMs, 3600000);
+      assert.equal(j.result.cacheScope, "public");
+      assert.equal(j.result._meta["io.modelcontextprotocol/serverInfo"].name, "waypoint-beacon");
+      assert.match(j.result.instructions, /log_watch appends one log entry/);
+    });
+
+    test("modern resources/list and resources/read work; Mcp-Name must be the uri", async () => {
+      const fake = standardRepo();
+      const uri = "ui://waypoint/chart-v1";
+      const list = await client(fake.gh).rpc(modernBody(1, "resources/list"), modernHeaders("resources/list"));
+      assert.equal(list.status, 200);
+      const read = await client(fake.gh).rpc(modernBody(2, "resources/read", { uri }), modernHeaders("resources/read", uri));
+      assert.equal(read.status, 200);
+      assert.match((await read.json()).result.contents[0].text, /^<!DOCTYPE html>/);
+      const stray = await client(fake.gh).rpc(modernBody(3, "resources/read", { uri, name: "x" }), modernHeaders("resources/read", "x"));
+      assert.equal(stray.status, 400);
+      assert.equal(fake.calls.length, 0);
+    });
+
+    test("modern tools/list and tools/call work with matching headers", async () => {
+      const { gh } = standardRepo();
+      const list = await (await client(gh).rpc(modernBody(1, "tools/list"), modernHeaders("tools/list"))).json();
+      assert.equal(list.result.cacheScope, "public");
+      const call = await client(gh).rpc(modernBody(2, "tools/call", { name: "take_fix", arguments: {} }),
+                                        modernHeaders("tools/call", "take_fix"));
+      assert.equal(call.status, 200);
+      assert.ok(JSON.parse((await call.json()).result.content[0].text).kpi);
+    });
+
+    test("a base64 Mcp-Name is decoded before comparing", async () => {
+      const b64 = "=?base64?" + btoa("take_fix") + "?=";
+      const res = await client(standardRepo().gh).rpc(modernBody(1, "tools/call", { name: "take_fix", arguments: {} }),
+                                                      modernHeaders("tools/call", b64));
+      assert.equal(res.status, 200);
+    });
+
+    test("a malformed or mismatched base64 Mcp-Name is 400 -32020, never a 500", async () => {
+      const fake = standardRepo();
+      const write = modernBody(1, "tools/call", { name: "log_watch", arguments: { project: "alpha", summary: "x" } });
+      for (const name of ["=?base64?a?=", "=?base64?QQ=Q?=", "=?base64?" + btoa("take_fix") + "?=", "=?base64?/w==?="]) {
+        const res = await client(fake.gh).rpc(write, modernHeaders("tools/call", name));
+        assert.equal(res.status, 400, name);
+        assert.equal((await res.json()).error.code, -32020, name);
+      }
+      assert.equal(fake.calls.length, 0);
+    });
+
+    test("a modern request without MCP-Protocol-Version is 400 -32020; a bad id is not echoed", async () => {
+      const init = modernHeaders("tools/list");
+      delete (init.headers as Record<string, string>)["mcp-protocol-version"];
+      const res = await client(standardRepo().gh).rpc({ ...modernBody(1, "tools/list"), id: { x: 1 } }, init);
+      assert.equal(res.status, 400);
+      const j = await res.json();
+      assert.equal(j.error.code, -32020);
+      assert.equal(j.id, null);
+    });
+
+    test("a modern notification gets 202", async () => {
+      const body = { jsonrpc: "2.0", method: "notifications/cancelled", params: { _meta: modernBody(0, "x").params._meta } };
+      const res = await client(standardRepo().gh).rpc(body, modernHeaders("notifications/cancelled"));
+      assert.equal(res.status, 202);
+    });
+
+    test("header mismatches are refused before dispatch, with no GitHub call", async () => {
+      const fake = standardRepo();
+      const write = modernBody(1, "tools/call", { name: "log_watch", arguments: { project: "alpha", summary: "x" } });
+      for (const init of [modernHeaders("tools/call", "take_fix"), modernHeaders("tools/list", "log_watch"),
+                          modernHeaders("tools/call", "log_watch", "2025-06-18"), modernHeaders("tools/call")]) {
+        const res = await client(fake.gh).rpc(write, init);
+        assert.equal(res.status, 400);
+        assert.equal((await res.json()).error.code, -32020);
+      }
+      assert.equal(fake.calls.length, 0);
+    });
+
+    test("unsupported modern version, missing capabilities, unknown method, initialize", async () => {
+      const { gh } = standardRepo();
+      const v = await client(gh).rpc(modernBody(1, "tools/list", {}, "2099-01-01"), modernHeaders("tools/list", undefined, "2099-01-01"));
+      assert.equal(v.status, 400);
+      const vj = await v.json();
+      assert.equal(vj.error.code, -32022);
+      assert.deepEqual(vj.error.data.supported, ["2026-07-28", "2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"]);
+      const noCaps = { jsonrpc: "2.0", id: 2, method: "tools/list", params: { _meta: { [PV]: "2026-07-28" } } };
+      const c = await client(gh).rpc(noCaps, modernHeaders("tools/list"));
+      assert.equal(c.status, 400);
+      assert.equal((await c.json()).error.code, -32602);
+      const m = await client(gh).rpc(modernBody(3, "nope/method"), modernHeaders("nope/method"));
+      assert.equal(m.status, 404);
+      assert.equal((await m.json()).error.code, -32601);
+      const i = await client(gh).rpc(modernBody(4, "initialize"), modernHeaders("initialize"));
+      assert.equal(i.status, 404);
+    });
+
+    test("a modern header without _meta is the legacy fallback signal", async () => {
+      const res = await client(standardRepo().gh).rpc({ jsonrpc: "2.0", id: 1, method: "tools/list" },
+                                                      modernHeaders("tools/list"));
+      assert.equal(res.status, 400);
+      assert.equal((await res.json()).error.code, -32600);
+    });
   });
 
   test("notifications get 202 and no body", async () => {
@@ -65,10 +185,10 @@ describe("mcp protocol", () => {
     assert.equal(await res.text(), "");
   });
 
-  test("tools/list: three tools with the right annotations", async () => {
+  test("tools/list: four tools with the right annotations", async () => {
     const j = await (await rpc({ jsonrpc: "2.0", id: 2, method: "tools/list" })).json();
     const by = Object.fromEntries(j.result.tools.map((t: { name: string }) => [t.name, t]));
-    assert.deepEqual(Object.keys(by).sort(), ["log_watch", "read_chart", "take_fix"]);
+    assert.deepEqual(Object.keys(by).sort(), ["log_watch", "read_chart", "show_chart", "take_fix"]);
     for (const n of ["take_fix", "read_chart"]) {
       assert.equal(by[n].annotations.readOnlyHint, true);
       assert.equal(by[n].annotations.openWorldHint, false);
@@ -82,6 +202,72 @@ describe("mcp protocol", () => {
     assert.equal(by.log_watch.inputSchema.properties.tool.description, "Your own tool id: codex for Codex, claude-code for Claude Code, chatgpt for ChatGPT. Defaults to chatgpt.");
     assert.equal(by.log_watch.inputSchema.properties.done.maxLength, 300);
     assert.equal(by.log_watch.inputSchema.properties.next.maxLength, 300);
+  });
+
+  describe("chart view tool (MCP Apps)", () => {
+    test("resources: advertised, listed and read with no GitHub call; unknown URI is -32602", async () => {
+      const fake = standardRepo();
+      const gh = fake.gh;
+      const init = await (await client(gh).rpc({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18" } })).json();
+      assert.deepEqual(init.result.capabilities.resources, {});
+      const list = (await (await client(gh).rpc({ jsonrpc: "2.0", id: 2, method: "resources/list" })).json()).result;
+      assert.deepEqual(list.resources.map((r: { uri: string; mimeType: string }) => [r.uri, r.mimeType]),
+                       [["ui://waypoint/chart-v1", "text/html;profile=mcp-app"]]);
+      assert.equal(list.cacheScope, "public");
+      const read = (await (await client(gh).rpc({ jsonrpc: "2.0", id: 3, method: "resources/read", params: { uri: "ui://waypoint/chart-v1" } })).json()).result;
+      const [c] = read.contents;
+      assert.equal(c.mimeType, "text/html;profile=mcp-app");
+      assert.match(c.text, /^<!DOCTYPE html>/);
+      assert.deepEqual(c._meta, { ui: { prefersBorder: true } });
+      assert.equal(read.ttlMs, 3600000);
+      const bad = await (await client(gh).rpc({ jsonrpc: "2.0", id: 4, method: "resources/read", params: { uri: "ui://waypoint/other" } })).json();
+      assert.equal(bad.error.code, -32602);
+      assert.equal(fake.calls.length, 0); // the template is static: no logbook read
+    });
+
+    test("show_chart is listed with its view and schema; log_watch is hidden from views; reads have no _meta", async () => {
+      const j = await (await client(standardRepo().gh).rpc({ jsonrpc: "2.0", id: 1, method: "tools/list" })).json();
+      const by = Object.fromEntries(j.result.tools.map((t: { name: string }) => [t.name, t]));
+      assert.deepEqual(Object.keys(by), ["take_fix", "read_chart", "log_watch", "show_chart"]);
+      const s = by.show_chart;
+      assert.equal(s._meta.ui.resourceUri, "ui://waypoint/chart-v1");
+      assert.equal(s._meta["ui/resourceUri"], "ui://waypoint/chart-v1");
+      assert.equal(s.annotations.readOnlyHint, true);
+      assert.deepEqual(s.inputSchema, { type: "object", properties: {}, additionalProperties: false });
+      assert.deepEqual(s.outputSchema.required, ["chart_generated", "data_complete", "kpi", "projects"]);
+      assert.deepEqual(by.log_watch._meta, { ui: { visibility: ["model"] } });
+      assert.equal(by.take_fix._meta, undefined);
+      assert.equal(by.read_chart._meta, undefined);
+    });
+
+    test("show_chart returns the allowlisted payload as structuredContent", async () => {
+      const res = await client(standardRepo().gh).rpc({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "show_chart", arguments: {} } });
+      const r = (await res.json()).result;
+      noLeak(JSON.stringify(r));
+      assert.deepEqual(Object.keys(r.structuredContent).sort(), ["chart_generated", "data_complete", "kpi", "projects"]);
+      for (const p of r.structuredContent.projects) {
+        assert.deepEqual(Object.keys(p).sort(), ["idle", "last_tool", "name", "next", "now_behind", "status", "summary", "unlogged"]);
+      }
+      const viaTakeFix = JSON.parse((await client(standardRepo().gh).call("take_fix")).text);
+      assert.deepEqual(r.structuredContent, viaTakeFix);
+    });
+
+    test("show_chart has a text reply for hosts without views", async () => {
+      const res = await client(standardRepo().gh).rpc({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "show_chart", arguments: {} } });
+      const r = (await res.json()).result;
+      assert.equal(r.content[0].type, "text");
+      assert.match(r.content[0].text, /^Chart taken .*: 2 tracked, \S+ unlogged watches, \S+ with Now behind the log\./);
+      assert.ok(!r.content[0].text.includes("summary"));
+    });
+
+    test("show_chart cuts summary and next to 300; take_fix keeps its own cap", async () => {
+      const long = "x".repeat(900);
+      const { gh } = standardRepo(undefined, dashboard([project("alpha", { summary: long, next: long })]));
+      const r = (await (await client(gh).rpc({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "show_chart", arguments: {} } })).json()).result;
+      assert.equal(r.structuredContent.projects[0].summary.length, 300);
+      assert.equal(r.structuredContent.projects[0].next.length, 300);
+      assert.equal(JSON.parse((await client(gh).call("take_fix")).text).projects[0].summary.length, 900);
+    });
   });
 
   test("log_watch tool ids match the local server's KNOWN_TOOLS", async () => {
@@ -166,7 +352,8 @@ describe("mcp protocol", () => {
   test("a streamed body within the cap still works", async () => {
     const body = new Blob([JSON.stringify({ jsonrpc: "2.0", id: 7, method: "ping" })]).stream();
     const req = new Request("https://waypoint.example/mcp", { method: "POST", body, duplex: "half" } as RequestInit);
-    assert.deepEqual(await (await handleMcp(req, { gh: standardRepo().gh })).json(), { jsonrpc: "2.0", id: 7, result: {} });
+    const reply = await (await handleMcp(req, { gh: standardRepo().gh })).json();
+    assert.equal(reply.result.resultType, "complete");
   });
 
   test("unknown tool and method names are echoed capped", async () => {

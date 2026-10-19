@@ -48,6 +48,27 @@ jobs:
           path: dist/
       - uses: pypa/gh-action-pypi-publish@release/v1
 
+  mcp-registry:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # GitHub OIDC login to the MCP Registry; no secret
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install mcp-publisher (pinned)
+        run: |
+          curl -fsSL -o mp.tgz "https://github.com/modelcontextprotocol/registry/releases/download/v1.8.1/mcp-publisher_linux_amd64.tar.gz"
+          # ponytail: no checksum yet; add `sha256sum -c` against the release checksums file once its name is confirmed
+          tar xzf mp.tgz mcp-publisher
+      - name: server.json version is the tag
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          test "$(jq -r .version server.json)" = "$v" && test "$(jq -r '.packages[0].version' server.json)" = "$v"
+      - run: ./mcp-publisher login github-oidc
+      - name: Publish (retry while PyPI propagates)
+        run: for i in 1 2 3 4 5; do ./mcp-publisher publish && exit 0; sleep 30; done; exit 1
+
   github-release:
     needs: publish
     runs-on: ubuntu-latest

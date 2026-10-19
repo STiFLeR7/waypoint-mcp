@@ -1,0 +1,21 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.STiFLeR7/waypoint-mcp",
+  "title": "Waypoint",
+  "description": "One chart of your projects across Claude Code, Codex, Gemini CLI, Copilot CLI, ChatGPT.",
+  "repository": {"url": "https://github.com/STiFLeR7/waypoint-mcp", "source": "github"},
+  "version": "0.4.0",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "waypoint-mcp",
+      "version": "0.4.0",
+      "runtimeHint": "uvx",
+      "transport": {"type": "stdio"},
+      "environmentVariables": [
+        {"name": "WAYPOINT_LOGBOOK", "description": "Logbook folder (default: the one `waypoint setup` remembered)",
+         "isRequired": false, "format": "string", "isSecret": false}
+      ]
+    }
+  ]
+}

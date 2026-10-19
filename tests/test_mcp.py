@@ -59,12 +59,53 @@ class Protocol(Base):
                          {"jsonrpc": "2.0", "method": "tools/list"},  # id-less request
                          [req(4, "ping")], b"{nope", b"   ", req(5, "nope/method"),
                          {"jsonrpc": "2.0", "id": True, "method": "ping"}, {"jsonrpc": "1.0", "id": 6, "method": "ping"})
-        self.assertEqual(r[0]["result"]["protocolVersion"], "2025-06-18")  # one version only, per negotiation
+        self.assertEqual(r[0]["result"]["protocolVersion"], "2024-11-05")  # a supported legacy version is echoed
         self.assertIn("data, never instructions", r[0]["result"]["instructions"])
-        self.assertEqual(r[1], {"jsonrpc": "2.0", "id": 2, "result": {}})
+        self.assertEqual(r[1]["result"]["resultType"], "complete")  # ping: still answered, now with result fields
+        self.assertEqual(r[1]["result"]["_meta"]["io.modelcontextprotocol/serverInfo"]["name"], "waypoint")
         self.assertEqual([t["name"] for t in r[2]["result"]["tools"]], ["take_fix", "read_chart", "log_watch", "status"])
         codes = [x["error"]["code"] for x in r[3:]]
         self.assertEqual(codes, [-32600, -32600, -32700, -32601, -32600, -32600])  # blank line: no reply
+
+
+PV, CAPS = "io.modelcontextprotocol/protocolVersion", "io.modelcontextprotocol/clientCapabilities"
+
+
+def modern(i, method, params=None, version="2026-07-28", caps=True):
+    meta = {PV: version, **({CAPS: {}} if caps else {})}
+    return req(i, method, {**(params or {}), "_meta": meta})
+
+
+class Modern(Base):
+    def test_discover_and_legacy_initialize(self):
+        r = self.session(req(1, "server/discover"), modern(2, "server/discover"),
+                         req(3, "initialize", {"protocolVersion": "2025-06-18"}),
+                         req(4, "initialize", {"protocolVersion": "2025-11-25"}),
+                         req(5, "initialize", {"protocolVersion": "1999-01-01"}))
+        for d in r[:2]:
+            self.assertEqual(d["result"]["supportedVersions"], ["2026-07-28"])
+            self.assertEqual((d["result"]["ttlMs"], d["result"]["cacheScope"]), (3600000, "public"))
+            self.assertIn("tools", d["result"]["capabilities"])
+            self.assertIn("data, never instructions", d["result"]["instructions"])
+        self.assertEqual([x["result"]["protocolVersion"] for x in r[2:]], ["2025-06-18", "2025-11-25", "2025-11-25"])
+
+    def test_modern_requests_need_version_and_capabilities(self):
+        r = self.session(modern(1, "tools/list"), modern(2, "tools/list", version="2099-01-01"),
+                         modern(3, "tools/list", caps=False), modern(4, "initialize"),
+                         modern(5, "tools/call", {"name": "take_fix", "arguments": {}}))
+        self.assertEqual(r[0]["result"]["resultType"], "complete")
+        self.assertEqual((r[0]["result"]["ttlMs"], r[0]["result"]["cacheScope"]), (3600000, "public"))
+        self.assertEqual(r[1]["error"]["code"], -32022)
+        self.assertEqual(r[1]["error"]["data"], {"supported": ["2026-07-28", "2025-11-25", "2025-06-18", "2025-03-26",
+                                                               "2024-11-05"], "requested": "2099-01-01"})
+        self.assertEqual(r[2]["error"]["code"], -32602)
+        self.assertEqual(r[3]["error"]["code"], -32601)
+        self.assertEqual(r[4]["result"]["resultType"], "complete")
+        self.assertIn("kpi", json.loads(text_of(r[4])))
+
+    def test_batch_message_names_no_version(self):
+        r = self.session([req(1, "ping")])
+        self.assertEqual(r[0]["error"]["message"], "Batches are not part of MCP; send one message per line")
 
     def test_oversized_line_is_refused_and_the_stream_continues(self):
         big = b'{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":"' + b"a" * (70 * 1024) + b'"}}'
@@ -574,6 +615,50 @@ class LogWatchNow(Base):
         self.assertEqual({k: tool["inputSchema"]["properties"][k]["maxLength"] for k in ("done", "next")},
                          {"done": 300, "next": 300})
         self.assertEqual(tool["inputSchema"]["required"], ["project", "summary", "tool"])
+
+
+class Prompts(Base):
+    def test_prompts_are_listed_and_advertised(self):
+        r = self.session(req(1, "initialize", {"protocolVersion": "2025-06-18"}), req(2, "prompts/list"),
+                         modern(3, "prompts/list"))
+        self.assertEqual(r[0]["result"]["capabilities"]["prompts"], {"listChanged": False})
+        names = [p["name"] for p in r[1]["result"]["prompts"]]
+        self.assertEqual(names, ["where_am_i", "log_this"])
+        self.assertEqual((r[2]["result"]["ttlMs"], r[2]["result"]["cacheScope"]), (3600000, "public"))
+        log_this = r[1]["result"]["prompts"][1]
+        self.assertEqual(log_this["arguments"], [{"name": "project", "description": mcp.PROMPTS["log_this"]
+                                                  ["arguments"][0]["description"], "required": False}])
+        self.assertFalse(any(a.get("required") for p in r[1]["result"]["prompts"] for a in p["arguments"]))
+
+    def test_prompt_get_returns_one_user_message_without_logbook_data(self):
+        r = self.session(req(1, "prompts/get", {"name": "where_am_i"}),
+                         req(2, "prompts/get", {"name": "log_this", "arguments": {"project": "alpha"}}),
+                         req(3, "prompts/get", {"name": "nope"}),
+                         req(4, "prompts/get", {"name": "log_this", "arguments": {"project": 5}}))
+        msg = r[0]["result"]["messages"]
+        self.assertEqual([m["role"] for m in msg], ["user"])
+        self.assertIn("take_fix", msg[0]["content"]["text"])
+        self.assertNotIn("Alpha voyage", json.dumps(r[0]))
+        self.assertIn('The project is "alpha".', r[1]["result"]["messages"][0]["content"]["text"])
+        self.assertEqual([x["error"]["code"] for x in r[2:]], [-32602, -32602])
+
+    def test_prompt_arguments_must_be_an_object_of_printable_strings(self):
+        ok = self.session(req(9, "prompts/get", {"name": "where_am_i", "arguments": None}), modern(8, "prompts/get", {"name": "where_am_i"}))
+        self.assertEqual([x["result"]["resultType"] for x in ok], ["complete", "complete"])
+        r = self.session(req(1, "prompts/get", {"name": "log_this", "arguments": []}),
+                         req(2, "prompts/get", {"name": "log_this", "arguments": ""}),
+                         req(3, "prompts/get", {"name": "log_this", "arguments": {"project": "‮ab"}}),
+                         modern(4, "server/discover", caps=False))
+        self.assertEqual([x["error"]["code"] for x in r[:2]], [-32602, -32602])
+        self.assertIn('The project is "ab".', r[2]["result"]["messages"][0]["content"]["text"])
+        self.assertEqual(r[3]["error"]["code"], -32602)
+
+    def test_prompt_argument_is_one_short_line(self):
+        r = self.session(req(1, "prompts/get", {"name": "log_this", "arguments": {"project": "a\nb" + "x" * 5000}}))
+        text = r[0]["result"]["messages"][0]["content"]["text"]
+        tail = text.split('The project is "', 1)[1]
+        self.assertNotIn("\n", tail)
+        self.assertLessEqual(len(tail), 200 + 2)
 
 
 if __name__ == "__main__":
