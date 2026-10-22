@@ -121,6 +121,20 @@ class Plans(Base):
         self.assertFalse((self.lb / "projects" / "_scratch.md").exists())
         self.assertIn(rules.BEGIN, (self.home / ".codex" / "AGENTS.md").read_text(encoding="utf-8"))
 
+    def test_plan_remembers_the_eod_address(self):
+        from waypoint import config
+        s = actions.Setup(self.lb, [str(self.code)], eod_email="you@gmail.com")
+        with patch("waypoint.rules._real_home", return_value=True):
+            steps = [st for st in actions.wizard_plan(s, self.home) if "end-of-day" in st.title]
+        self.assertEqual([st.title for st in steps], ["Remember the end-of-day email address"])
+        self.assertIsNone(config.eod_email())
+        self.assertEqual([err for _, err in actions.apply_steps(steps)], [None])
+        self.assertEqual(config.eod_email(), "you@gmail.com")
+
+    def test_plan_skips_eod_under_a_fake_home(self):
+        s = actions.Setup(self.lb, [str(self.code)], eod_email="you@gmail.com")
+        self.assertFalse([st for st in actions.wizard_plan(s, self.home) if "end-of-day" in st.title])
+
     def test_bad_project_name_is_skipped_and_the_rest_applies(self):
         bad = self.code / "_scratch"
         bad.mkdir()

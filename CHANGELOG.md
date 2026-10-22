@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.0 — "Evening watch"
+
+- **End-of-day email (optional).** Ask your AI tool for it and it emails you today's work across every project through AgentMail: progress, today's log entries, Done and Next. Waypoint builds the email itself: the read-only MCP tool `eod_report` returns the subject, a plain-text body and an email-safe dark HTML body with the Waypoint mark attached, listing every log entry dated today. Attention lines are never included, whatever `[mcp] include_attention` says. The `send_eod` prompt tells your tool to send exactly that (`/mcp__waypoint__send_eod` in Claude Code, `/send_eod` in Gemini CLI, or say "send my EoD"). Waypoint itself still sends nothing.
+- `waypoint email` prints the AgentMail connect steps for each AI tool (`--scope user` in Claude Code and Gemini CLI, so it works in every project) and remembers (`--to`) or forgets (`--forget`) your address, in one local file that is never in the logbook. `setup` can ask for it (wizard step 6 of 9; never under `--yes`). `waypoint status` shows whether an address is remembered, never the address.
+- Logbook spec v1.5 (additive; v1.4 and v1.5 add the address file, `send_eod` and `eod_report`). Existing logbooks need no changes; `dashboard.json` stays schema 1.
+
 ## 0.4.0 — "Ship's bell"
 
 - The Waypoint plugin: one repo installs Waypoint's hooks and MCP server in Claude Code, Codex and Copilot CLI (plugin) and Gemini CLI (extension). `waypoint connect <cli> --plugin` prepares a machine for it; `waypoint status` shows when hooks last ran.

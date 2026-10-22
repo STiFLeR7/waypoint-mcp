@@ -1,6 +1,6 @@
-"""`waypoint setup` as a screen (spec Part C, wizard steps 1-8). Each screen function asks, stores the answer in
+"""`waypoint setup` as a screen (spec Part C, wizard steps 1-9). Each screen function asks, stores the answer in
 the Wizard, and returns "next", "back", "quit" or "skip". Nothing is written before Apply: steps 1-5 only read,
-step 6 shows the plan (actions.wizard_plan), step 7 applies it."""
+step 7 shows the plan (actions.wizard_plan), step 8 applies it."""
 import os
 import webbrowser
 from dataclasses import dataclass, field
@@ -10,7 +10,7 @@ from .. import cli, clis, config, rules, status
 from . import actions, render
 from .model import Choice, ListModel
 
-TOTAL = 8
+TOTAL = 9
 
 
 @dataclass
@@ -26,13 +26,15 @@ class Wizard:
     tools: list = field(default_factory=list)
     where: dict = field(default_factory=dict)
     codex_writable: bool = True
+    eod_email: str | None = None
     plan: list = field(default_factory=list)
     results: list = field(default_factory=list)
 
     def setup(self) -> actions.Setup:
         track = [c.key for c in self.projects if c.on and not c.locked]
         return actions.Setup(self.lb, self.roots, git=self.git, track=track, ignore=list(self.ignore),
-                             tools={t: self.where.get(t) for t in self.tools}, codex_writable=self.codex_writable)
+                             tools={t: self.where.get(t) for t in self.tools}, codex_writable=self.codex_writable,
+                             eod_email=self.eod_email)
 
     def repo_pool(self) -> list:
         """Folders a per-project install can target: tracked projects and the ones being added."""
@@ -233,8 +235,39 @@ def screen_where(ui, w: Wizard):
     return "next"
 
 
+def screen_eod(ui, w: Wizard):
+    if not w.tools:
+        w.eod_email = None  # an earlier Yes no longer applies
+        return "skip"
+    ui.show(render.step_title(ui.term, 6, TOTAL, "End-of-day email",
+                              "Optional. You ask your AI tool; it sends the email through AgentMail."))
+    while True:
+        m = ListModel("Get an end-of-day email you ask your AI tool to send?", [
+            Choice("yes", "Yes"), Choice("no", "No", on=True)], multi=False, cursor=1)
+        out = ui.choose(m)
+        if out != "next":
+            return out
+        if m.selected() == ["no"]:
+            w.eod_email = None
+            return "next"
+        while True:
+            address = ui.text("Your email address (stays on this machine): ", config.eod_email() or "")
+            if not address:
+                break  # back from the input: the Yes/No list again
+            try:
+                config.eod_email_plan(address)
+                break
+            except ValueError as e:
+                ui.show(render.line(ui.term, "warn", str(e)))
+        if not address:
+            continue
+        w.eod_email = address
+        ui.show(clis.email_steps(w.tools))
+        return "next"
+
+
 def screen_review(ui, w: Wizard):
-    ui.show(render.step_title(ui.term, 6, TOTAL, "Review", "Every change, grouped by step. Enter shows a step's changes."))
+    ui.show(render.step_title(ui.term, 7, TOTAL, "Review", "Every change, grouped by step. Enter shows a step's changes."))
     w.plan = actions.wizard_plan(w.setup(), w.home)
     env_lb = os.environ.get("WAYPOINT_LOGBOOK")
     if env_lb and Path(env_lb).expanduser().resolve() != w.lb.resolve():
@@ -244,7 +277,7 @@ def screen_review(ui, w: Wizard):
 
 
 def screen_apply(ui, w: Wizard):
-    ui.show(render.step_title(ui.term, 7, TOTAL, "Apply"))
+    ui.show(render.step_title(ui.term, 8, TOTAL, "Apply"))
     w.results = []
     for st, err in actions.apply_steps(w.plan):
         w.results.append((st, err))
@@ -253,10 +286,12 @@ def screen_apply(ui, w: Wizard):
 
 
 def screen_done(ui, w: Wizard):
-    ui.show(render.step_title(ui.term, 8, TOTAL, "Done"))
+    ui.show(render.step_title(ui.term, 9, TOTAL, "Done"))
     failed = sum(1 for _, err in w.results if err)
     broken = {st.tool for st, err in w.results if st.tool and err}
     ui.show(render.done(ui.term, len([t for t in w.tools if t not in broken]), len(w.tools), w.lb, failed))
+    if w.eod_email:
+        ui.show(render.line(ui.term, "ok", 'End-of-day email: ask with /mcp__waypoint__send_eod (Claude Code), /send_eod (Gemini CLI) or "send my EoD"; steps again: waypoint email'))
     if not (w.lb / "projects").is_dir():
         return "next"
     try:
@@ -273,7 +308,7 @@ def screen_done(ui, w: Wizard):
     return "next"
 
 
-SCREENS = (screen_logbook, screen_roots, screen_projects, screen_tools, screen_where, screen_review, screen_apply,
+SCREENS = (screen_logbook, screen_roots, screen_projects, screen_tools, screen_where, screen_eod, screen_review, screen_apply,
            screen_done)
 
 

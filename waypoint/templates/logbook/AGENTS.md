@@ -2,7 +2,7 @@
 
 This folder is a Waypoint **logbook**: one Markdown file per project in `projects/`, plus a generated chart. It holds no application code. Each project's own docs are the source of truth; files here summarize and link to them.
 
-The format is defined by Waypoint's `LOGBOOK-SPEC` (v1.2). In short:
+The format is defined by Waypoint's `LOGBOOK-SPEC` (v1.5). In short:
 
 - `projects/<name>.md`: header (`- Path:`, `- Status:`, `- Summary:`, `- Docs:`, `- Attention:` lines), then `## Now` (`- Done:`, `- Next:`, and `- Updated: YYYY-MM-DD`, set whenever you edit Now), then `## Log` **last**, newest entry first:
   ```markdown

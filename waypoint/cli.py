@@ -11,6 +11,7 @@
   waypoint connect <cli>           wire one AI CLI: its rule and the local MCP server (--project <repo>: that repo only)
   waypoint disconnect <cli>        remove only what Waypoint added for one AI CLI (--project <repo>: that repo only)
   waypoint rules [--install|--uninstall]   show, check, install or remove the global rule
+  waypoint email [--to ADDRESS|--forget]   optional end-of-day email: AgentMail steps, remember or forget the address
   waypoint init <dir>              scaffold a logbook (setup does this for you)
 """
 import argparse
@@ -287,6 +288,29 @@ def cmd_status(a):
     print(json.dumps(s, ensure_ascii=False, indent=1) if a.json else status.render_text(s))
 
 
+def cmd_email(a):
+    """Spec §6 and A.3: print the AgentMail steps, or remember/forget the address (this machine only)."""
+    if a.to is not None:
+        try:
+            plan = config.eod_email_plan(a.to)
+        except ValueError as e:
+            sys.exit(f"waypoint: {e}")
+        if plan is None:
+            return print("Already remembered.")
+        f = config.remember_eod_email(a.to)
+        return print(f"Remembered {a.to} in {f} (this machine only; never in the logbook).")
+    if a.forget:
+        try:
+            gone = config.forget_eod_email()
+        except OSError as e:
+            sys.exit(f"waypoint: couldn't forget the end-of-day email address: {e}")
+        return print("Forgot the end-of-day email address." if gone
+                     else "No end-of-day email address was remembered.")
+    print(clis.email_steps([a.tool], chatgpt=False) if a.tool else clis.email_steps(clis.detected()))  # spec A.4
+    addr = config.eod_email()
+    print(f"\nEnd-of-day email address: {addr}" if addr else
+          "\nEnd-of-day email address: none remembered (waypoint email --to <address>)")
+
 # ---- fix ----
 
 def cmd_fix(a):
@@ -489,6 +513,23 @@ def cmd_disconnect(a):
 
 # ---- setup ----
 
+def _ask_eod_email():
+    """The optional end-of-day email question: the address, or None when declined or after 3 bad tries."""
+    if not confirm("Get an end-of-day email you ask your AI tool to send? (optional)"):
+        return None
+    for _ in range(3):
+        address = ask("Your email address (stays on this machine)", config.eod_email() or "")
+        if not address:
+            return None  # nothing typed and nothing remembered: declined
+        try:
+            config.eod_email_plan(address)
+            return address
+        except ValueError as e:
+            print(f"  ! {e}")
+    print("  ! no address; run: waypoint email --to <address>")
+    return None
+
+
 def cmd_setup(a):
     home = _home(a)
     from . import tui
@@ -525,6 +566,7 @@ def cmd_setup(a):
 
     tools = [c.id for c in clis.WIRED if c.id in a.tool] if a.tool else clis.detected()
     make_git = not (lb / ".git").exists() and (a.git or (not a.yes and confirm("Make the logbook a git repo (recommended)?")))
+    eod = _ask_eod_email() if tools and not a.yes else None  # optional, default No; never with --yes (spec §6 v1.4)
 
     # the whole plan, before any write
     created, kept, notes = init_logbook(lb, roots=roots, dry_run=True)
@@ -540,12 +582,19 @@ def cmd_setup(a):
               + (" (already)" if remember is None else ""))
     else:
         print("  = logbook not remembered (--home isn't your home folder)")
+    eod_plan = config.eod_email_plan(eod) if eod and real_home else None
+    if eod:
+        if real_home:
+            print(f"  {'=' if eod_plan is None else '+'} end-of-day email address in {config.user_dir() / config.EOD_FILE}"
+                  + (" (already)" if eod_plan is None else ""))
+        else:
+            print("  = end-of-day email address not remembered (--home isn't your home folder)")
     found = ', '.join(tools) or 'none found on PATH (' + ', '.join(c.exe for c in clis.WIRED) + ')'
     print(f"\nRule{'' if a.no_mcp else ' and MCP server'} for AI tools: {found}.")
     writes = show_plan(plan)
     if any(c.action == "refuse" for c in plan):
         sys.exit("\nwaypoint: some changes can't be made safely (see above); nothing was written.")
-    if not (created or make_git or remember is not None or writes):
+    if not (created or make_git or remember is not None or eod_plan is not None or writes):
         print("\nAlready fitted out. Nothing to change.")
     elif not confirm("\nWrite these changes?", a.yes):
         sys.exit("Cancelled; nothing written.")
@@ -557,8 +606,15 @@ def cmd_setup(a):
                 print(f"  ! git init failed: {(r.stderr or r.stdout).strip()}")
         if remember is not None:
             config.remember_logbook(lb)
+        if eod_plan is not None:
+            try:
+                config.remember_eod_email(eod)
+            except OSError as e:
+                print(f"  ! couldn't remember the end-of-day email address: {e}")
         if writes and not _report(rules.apply(writes)):
             sys.exit(1)
+    if eod:
+        print("\n" + clis.email_steps(tools))
     print("\nReady to sail. Next:\n  waypoint add <project folder>    chart a voyage (project)\n"
           "  waypoint refresh                 refresh the dashboard")
 
@@ -594,7 +650,7 @@ def cmd_menu(a):
 
 def main(argv=None):
     p = argparse.ArgumentParser(prog="waypoint", description="Every voyage (project), every navigator (AI tool), one chart.")
-    p.add_argument("--version", action="version", version=f"waypoint {__version__} (logbook spec v1.3)")
+    p.add_argument("--version", action="version", version=f"waypoint {__version__} (logbook spec v1.5)")
     sub = p.add_subparsers(dest="cmd", required=True)
     lb_help = "logbook folder (default: WAYPOINT_LOGBOOK, then the one `setup` remembered, then the current folder)"
 
@@ -652,6 +708,13 @@ def main(argv=None):
     st.add_argument("--json", action="store_true", help="machine-readable output")
     st.add_argument("--home", help=argparse.SUPPRESS)
     st.set_defaults(func=cmd_status)
+
+    em = sub.add_parser("email", help="optional end-of-day email: AgentMail steps; remember or forget the address")
+    g = em.add_mutually_exclusive_group()
+    g.add_argument("--to", metavar="ADDRESS", help="remember this address on this machine (never in the logbook)")
+    g.add_argument("--forget", action="store_true", help="forget the remembered address")
+    em.add_argument("--tool", choices=list(clis.CLIS) + ["chatgpt"], help="show the steps for one tool only")
+    em.set_defaults(func=cmd_email)
 
     c = sub.add_parser("connect", help="wire one AI CLI (rule + local MCP server), or print config for the others")
     c.add_argument("cli", choices=list(clis.CLIS), help="the AI CLI, by its tool id")

@@ -82,6 +82,35 @@ def plugin_text(cli_id):
             "The hooks run `waypoint`, so keep it on PATH.")
 
 
+AGENTMAIL_URL = "https://mcp.agentmail.to/mcp"
+AGENTMAIL_STEPS = {  # spec A.3; the user runs these, Waypoint writes nothing for AgentMail and makes no request
+    "claude-code": (f"claude mcp add --transport http --scope user agentmail {AGENTMAIL_URL}",),
+    "codex": (f"codex mcp add agentmail --url {AGENTMAIL_URL}", "codex mcp login agentmail"),
+    "gemini-cli": (f"gemini mcp add --transport http --scope user agentmail {AGENTMAIL_URL}", "then in a session: /mcp auth"),
+    "copilot-cli": (f"copilot mcp add --transport http agentmail {AGENTMAIL_URL}",),
+    "chatgpt": ("add the AgentMail app in ChatGPT's apps settings",),
+}
+_AM_GENERIC = (f"add {AGENTMAIL_URL} as a remote (HTTP) MCP server in its settings",)
+_AM_CHATGPT = "ChatGPT (if you use the beacon)"
+
+
+def email_steps(tool_ids, chatgpt=True):
+    """Spec A.3 text for these tools; the ChatGPT block comes last, once (with chatgpt, or when asked for). Unknown ids raise KeyError."""
+    ids = [t for t in dict.fromkeys(tool_ids) if t != "chatgpt"]
+    blocks = [(CLIS[t].name, AGENTMAIL_STEPS.get(t, _AM_GENERIC)) for t in ids]
+    if chatgpt or "chatgpt" in tool_ids:
+        blocks.append((_AM_CHATGPT, AGENTMAIL_STEPS["chatgpt"]))
+    tools = "\n".join(f"  {n}:\n" + "\n".join(f"    {c}" for c in cmds) for n, cmds in blocks)
+    return ("End-of-day email (optional). Waypoint writes nothing for AgentMail and makes no network request.\n"
+            "1. Create a free AgentMail account at https://console.agentmail.to with your own email address (on the free tier,\n"
+            '   mail can only go to that address; free mail carries a "Sent via AgentMail" footer). Create one inbox there: it sends.\n'
+            "2. Connect AgentMail to each AI tool:\n"
+            f"{tools}\n"
+            "3. Sign in once in the browser when the tool asks.\n"
+            "4. Ask for it: /mcp__waypoint__send_eod (Claude Code; /mcp__waypoint-local__send_eod if Waypoint is registered\n"
+            '   as waypoint-local), /send_eod (Gemini CLI), or say "send my EoD".')
+
+
 def config_dir(cli_id, home: Path) -> Path:
     if cli_id == "claude-code":
         return tool_dir(home, "CLAUDE_CONFIG_DIR", ".claude")

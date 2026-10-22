@@ -160,6 +160,7 @@ class Setup:
     ignore: list = field(default_factory=list)  # folders to list in _ignore.txt
     tools: dict = field(default_factory=dict)  # cli id -> None (global) or [repo folders] (per project)
     codex_writable: bool = True
+    eod_email: str | None = None
 
 
 def _git_init(lb: Path):
@@ -180,6 +181,9 @@ def wizard_plan(s: Setup, home: Path) -> list:
     if rules._real_home(home) and config.remember_plan(lb) is not None:
         steps.append(Step("Remember the logbook", run=lambda: config.remember_logbook(lb), needs_logbook=True,
                           lines=[f"+ {config.user_dir() / 'logbook'}"]))
+    if s.eod_email and rules._real_home(home) and config.eod_email_plan(s.eod_email) is not None:
+        steps.append(Step("Remember the end-of-day email address", run=lambda: config.remember_eod_email(s.eod_email),
+                          lines=[f"+ {config.user_dir() / config.EOD_FILE} (this machine only)"], needs_logbook=False))
     for folder in s.track:
         st = plan_track(lb, Path(folder)); st.needs_logbook = True; steps.append(st)
     for folder in s.ignore:

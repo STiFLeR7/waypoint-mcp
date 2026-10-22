@@ -199,7 +199,7 @@ class Story(unittest.TestCase):
         replies = [json.loads(l) for l in p.stdout.decode("utf-8").splitlines()]  # stdout: protocol only
         self.assertEqual([r["id"] for r in replies], list(range(len(calls) + 2)))
         self.assertEqual(replies[0]["result"]["protocolVersion"], "2025-06-18")
-        self.assertEqual([t["name"] for t in replies[1]["result"]["tools"]], ["take_fix", "read_chart", "log_watch", "status"])
+        self.assertEqual([t["name"] for t in replies[1]["result"]["tools"]], ["take_fix", "read_chart", "log_watch", "status", "eod_report"])
         self.assert_private(p.stdout.decode("utf-8"))
         return replies[2:]
 

@@ -4,6 +4,7 @@ from any folder: everything happens in a temp folder with a temp --home, so real
     python scripts/smoke_installed.py
 """
 import json
+import re
 import os
 import shutil
 import subprocess
@@ -29,7 +30,7 @@ def mcp(exe, lb, cwd, *calls):
                        capture_output=True, text=True, encoding="utf-8", timeout=60)
     replies = {m["id"]: m for m in map(json.loads, r.stdout.splitlines())}  # stdout must be protocol only
     assert replies[0]["result"]["protocolVersion"] == "2025-06-18"
-    assert {t["name"] for t in replies[1]["result"]["tools"]} == {"take_fix", "read_chart", "log_watch", "status"}
+    assert {t["name"] for t in replies[1]["result"]["tools"]} == {"take_fix", "read_chart", "log_watch", "status", "eod_report"}
     return [replies[i]["result"] for i in range(2, 2 + len(calls))]
 
 
@@ -42,7 +43,7 @@ def main():
         for d in (home, code / "alpha", elsewhere):
             d.mkdir(parents=True)
         out = run(exe["waypoint"], "--version", cwd=elsewhere)
-        assert "(logbook spec v1.3)" in out, out
+        assert re.search(r"\(logbook spec v\d+\.\d+\)", out), out  # the version itself is pinned by unit tests
         run(exe["waypoint-mcp"], "--help", cwd=elsewhere)
         h = subprocess.run([exe["waypoint"], "hook", "stop", "--tool", "claude-code"], input="not json", cwd=elsewhere,
                            capture_output=True, text=True, timeout=120)
@@ -55,17 +56,19 @@ def main():
         page = (lb / "chart.html").read_text(encoding="utf-8")  # the template shipped as package data
         assert '<script type="application/json" id="waypoint-data">{"schema":1,' in page, page[:200]
 
-        ok, bad_tool, bad_project, too_long, fix = mcp(exe["waypoint-mcp"], lb, elsewhere,
+        ok, bad_tool, bad_project, too_long, fix, eod = mcp(exe["waypoint-mcp"], lb, elsewhere,
             ("log_watch", {"project": "alpha", "summary": "smoke test entry", "tool": "codex"}),
             ("log_watch", {"project": "alpha", "summary": "x", "tool": "not-a-tool"}),
             ("log_watch", {"project": "nope", "summary": "x", "tool": "codex"}),
             ("log_watch", {"project": "alpha", "summary": "x" * 2001, "tool": "codex"}),
-            ("take_fix", {}))
+            ("take_fix", {}), ("eod_report", {}))
         assert not ok.get("isError") and "Logged" in ok["content"][0]["text"], ok
         for r in (bad_tool, bad_project, too_long):
             assert r.get("isError"), r
         assert "smoke test entry" in (lb / "projects" / "alpha.md").read_text(encoding="utf-8")
         assert not fix.get("isError"), fix
+        report = json.loads(eod["content"][0]["text"])  # the logo PNG ships as package data
+        assert "cid:waypoint-mark" in report["html"] and report["attachments"][0]["content"].startswith("iVBOR"), eod
 
         (lb / ".waypoint.lock").write_text("12345", encoding="utf-8")  # another writer holds the lock
         [busy] = mcp(exe["waypoint-mcp"], lb, elsewhere, ("log_watch", {"project": "alpha", "summary": "y", "tool": "codex"}))

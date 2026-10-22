@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest import mock
 from unittest.mock import patch
 
-from waypoint import cli, project, rules, status
+from waypoint import cli, config, project, rules, status
 from waypoint.mcp import Server
 
 
@@ -30,6 +30,23 @@ class Status(unittest.TestCase):
 
     def collect(self, lb="default"):
         return status.collect(self.lb if lb == "default" else lb, "--logbook", self.home)
+
+    def test_eod_state_never_shows_the_address(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        with patch.dict(os.environ, {"APPDATA": tmp.name, "XDG_CONFIG_HOME": tmp.name}):
+            f = config.user_dir() / config.EOD_FILE
+            self.assertEqual(self.collect()["eod"], "none")
+            f.parent.mkdir(parents=True)
+            f.write_text("secret@x.com\n",encoding="utf-8")
+            s = self.collect()
+            self.assertEqual(s["eod"], "remembered")
+            self.assertNotIn("secret@x.com", json.dumps(s) + status.render_text(s))
+            self.assertIn("End-of-day email  address remembered", status.render_text(s))
+            f.write_text("not an address", encoding="utf-8")
+            s = self.collect()
+            self.assertEqual(s["eod"], "invalid")
+            self.assertIn("eod-email-invalid", [p["id"] for p in s["problems"]])
 
     def test_no_logbook_is_a_problem_not_a_crash(self):
         s = self.collect(lb=None)

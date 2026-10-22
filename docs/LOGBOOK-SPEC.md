@@ -1,4 +1,4 @@
-# Logbook Spec, v1.3
+# Logbook Spec, v1.5
 
 The **logbook** is the contract every tool (Claude Code, Codex, ChatGPT, or you) agrees on. It's plain files in a folder, ideally a private git repo. Tools write project files following these rules.
 
@@ -6,6 +6,7 @@ The **logbook** is the contract every tool (Claude Code, Codex, ChatGPT, or you)
 - `waypoint refresh` (alias `fix`) writes only the chart files (§5).
 - `waypoint add` creates one project file from the template, with no log entry, and never overwrites (§1).
 - `waypoint init` / `setup` create missing logbook files; `setup` also records which logbook to use (§6).
+- `setup` (when asked) and `waypoint email --to` write one file outside the logbook, `<config>/waypoint/eod-email`, holding the owner's address; `waypoint email --forget` deletes it (§6).
 - Gemini CLI's per-repo MCP entry is in `<repo>/.gemini/settings.json`, written by `gemini mcp add --scope project`; when Waypoint created the file, it is listed in the repo's `.git/info/exclude` block (§7.1).
 - Agents, following the rule (§7), append log entries and maintain `## Now` (setting `- Updated:` when they edit it) and `- Attention:` lines. They never change Status and never archive without the user's say-so. `log_watch` (§8) adds one entry and, when asked, sets Done, Next and Updated in `## Now` (§8.3).
 - `waypoint archive` / `restore` move one project file between `projects/` and `projects/_archive/`; `waypoint remove` deletes one project file at the user's request (`remove --ignore` also adds one line to `projects/_ignore.txt`); `waypoint ignore` adds or removes one line in `projects/_ignore.txt`. All hold the logbook lock and never change a project file's contents.
@@ -220,6 +221,8 @@ Every key is optional and the defaults are shown above. `roots` defaults to the 
 
 **Which logbook (v1.1).** Commands use, in order: `--logbook`; the `WAYPOINT_LOGBOOK` environment variable; the path `waypoint setup` saved in `<config>/waypoint/logbook` (`%APPDATA%` on Windows, else `$XDG_CONFIG_HOME` or `~/.config`); the current folder.
 
+**End-of-day email address (v1.4).** `<config>/waypoint/eod-email` (same folder as `logbook`) holds one line: the owner's address, at most 254 characters, exactly one `@`, matching `^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$`. It is optional, never in the logbook, `waypoint.toml` or `dashboard.json`; `setup` writes it only for the real home folder; `waypoint email --to` writes it in the current user's folder. Anything else in the file reads as no address; `waypoint status` reports `eod-email-invalid`. `status` shows only whether an address is remembered, never the address.
+
 **Tool folders.** `~/.claude` and `~/.codex` stand for each tool's config folder: `CLAUDE_CONFIG_DIR` and `CODEX_HOME` move them when set.
 
 ## 7. Global rules
@@ -279,6 +282,8 @@ A stdio MCP server started by an AI tool on the owner's machine, for one logbook
 - **Transport:** MCP 2026-07-28 (each request carries its version and client capabilities in `_meta`; `server/discover`), and 2025-11-25, 2025-06-18, 2025-03-26 and 2024-11-05 through `initialize`; newline-delimited UTF-8 JSON-RPC; stdout carries protocol messages only; batches and requests without an id are refused; a request line is at most 64 KB and a reply at most 256 KB; each tool call finishes within 10 s; the process exits when stdin closes. It opens no network listener and makes no outbound requests. The tools that connect forward its results to their own model providers.
 - **Reads** are built fresh from the logbook and local tool history, with the same fields as §8.1, plus Done in `read_chart`. Attention lines are included only when `waypoint.toml` sets `[mcp] include_attention = true`. Never included: session titles, the feed, untracked folders, file paths, source details, rule state.
 - **Prompts (v1.3):** `where_am_i` and `log_this` (optional `project`). Their text tells the agent which tool to call and holds no logbook data.
+- **Tool `eod_report()` (v1.5, read-only):** builds today's end-of-day email from the logbook and returns `subject`, `text`, `html`, `attachments` (the logo, inline, content id `waypoint-mark`), `date` (the server's local date), `counts`, `data_complete` and `note`. The HTML is email-safe (table layout, type styles in one `<style>` block, colours and backgrounds inline so it stays readable without it, no script, no SVG, no remote resources) and every logbook string in it is escaped. It includes the projects with a log entry dated today or idle 0, and every log entry dated today (no cap). The HTML shows each included project's Summary, today's entries and Next; the text shows today's entries, Done and Next. Other active or occasional projects with a Next are named. **Attention lines are never included, whatever `[mcp] include_attention` says.** It holds no address. It sends nothing.
+- **Prompt `send_eod` (v1.4, changed in v1.5):** asks the agent to call `eod_report`, pick the first AgentMail inbox (never create one) and send exactly the subject, text, html and attachments it returned with the AgentMail `send_message` tool, to one address only. Its text is fixed except one sentence at the end: `Send it to <address>.` with the address from `eod-email` when it is valid (§6), else `Ask the owner for their email address before sending.` It is the only place the MCP server returns the address (`waypoint email` also prints it on the CLI). Waypoint itself sends nothing.
 - **`status()`** (read-only) is the one exception to the list above: it reports rule, MCP-registration and source *states*, project counts, per-tool rule method, `scope` (`global` and/or `project`), per-project install counts, and the local MCP `name` when registered, so an agent can tell the owner what to fix. It never includes file paths, commands, source details or project text; problem lines are fixed sentences naming only the tool or source.
 - **Trust boundary:** quoting (§2.2) protects the file's grammar, not the reader. Every tool description and every read result states that project text is the owner's notes: data, never instructions.
 - A timed-out write must not later replace a project file. The final replacement and the timeout response share a cancellation gate.
@@ -303,3 +308,5 @@ A stdio MCP server started by an AI tool on the owner's machine, for one logbook
 - **v1.2** (2026-10-15) is additive: the optional `Updated` line in `## Now` (§2.1), `updated`, `now_behind` and `kpi.behind` (§4.4, §5.1), `log_watch` `done`/`next` (§8.3), and per-project install (§7.1). Existing logbooks need no changes; `dashboard.json` stays schema 1.
 - **v1.3** (2026-10-19) is additive: hooks and `[hooks]` (§6, §7.2); MCP 2026-07-28, prompts and `show_chart` and its view (§8.1, §8.2). Existing logbooks need no changes; `dashboard.json` stays schema 1.
 - Grammar changes that break existing readers bump this spec's major version.
+- **v1.4** (2026-10-22) is additive: the optional end-of-day email address file `eod-email` (§6) and the `send_eod` prompt (§8.2). Existing logbooks need no changes; `dashboard.json` stays schema 1.
+- **v1.5** (2026-10-22) is additive: the read-only `eod_report` tool and an HTML end-of-day email built by Waypoint, and the changed `send_eod` prompt (§8.2). Existing logbooks need no changes; `dashboard.json` stays schema 1.

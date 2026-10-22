@@ -155,7 +155,7 @@ class Setup(Base):
     def test_declining_writes_nothing(self):  # M2
         new = Path(self.tmp.name) / "new"
         code, out = self.run_cli("setup", "--logbook", str(new), "--root", str(self.root), "--tool", "codex",
-                                 "--home", str(self.home), answers=["n", "n"])  # no git, then don't write
+                                 "--home", str(self.home), answers=["n", "n", "n"])  # no git, no email, then don't write
         self.assertNotEqual(code, 0)
         self.assertFalse(new.exists())
         self.assertFalse((self.home / ".codex" / "AGENTS.md").exists())

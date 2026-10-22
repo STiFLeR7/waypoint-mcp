@@ -1,5 +1,6 @@
-"""waypoint.toml loading (LOGBOOK-SPEC §6)."""
+"""waypoint.toml loading, the remembered logbook and the end-of-day email address (LOGBOOK-SPEC §6 v1.4)."""
 import os
+import re
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -110,3 +111,54 @@ def remember_logbook(logbook: Path) -> Path:
         tmp.write_text(want, encoding="utf-8")
         os.replace(tmp, f)
     return f
+
+
+EOD_FILE = "eod-email"  # inside user_dir(); never in the logbook, waypoint.toml or dashboard.json
+_EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+
+
+def valid_email(text: str) -> bool:
+    return len(text) <= 254 and _EMAIL.fullmatch(text) is not None
+
+
+def eod_email() -> str | None:
+    """The remembered end-of-day address, or None when missing, unreadable, multi-line or invalid. Never raises."""
+    try:
+        lines = [x for x in (user_dir() / EOD_FILE).read_text(encoding="utf-8").splitlines() if x.strip()]
+    except (OSError, UnicodeError):
+        return None
+    return lines[0].strip() if len(lines) == 1 and valid_email(lines[0].strip()) else None
+
+
+def eod_email_state() -> str:
+    """"remembered", "invalid" (a file is there but holds no usable address) or "none"."""
+    if eod_email():
+        return "remembered"
+    return "invalid" if os.path.lexists(user_dir() / EOD_FILE) else "none"
+
+
+def eod_email_plan(address: str):
+    """The text `remember_eod_email` would write, or None when it is already remembered."""
+    if not valid_email(address):
+        shown = "".join(c for c in address[:64] if c.isprintable())
+        raise ValueError(f"not an email address: {shown}")
+    return None if eod_email() == address else address + "\n"
+
+
+def remember_eod_email(address: str) -> Path:
+    f = user_dir() / EOD_FILE
+    want = eod_email_plan(address)
+    if want is not None:
+        f.parent.mkdir(parents=True, exist_ok=True)
+        tmp = f.with_name(f".{EOD_FILE}.{os.getpid()}.tmp")
+        tmp.write_text(want, encoding="utf-8")
+        os.replace(tmp, f)
+    return f
+
+
+def forget_eod_email() -> bool:
+    try:
+        (user_dir() / EOD_FILE).unlink()
+    except FileNotFoundError:
+        return False
+    return True

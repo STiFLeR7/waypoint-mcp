@@ -62,7 +62,7 @@ Automatic session history (which project, which tool, when) comes from **Claude 
 | Cursor, Windsurf, Kiro, Cline, Claude Desktop, Goose, opencode, Amp | Snippet | `waypoint connect <cli>` prints the config to paste; writes nothing |
 | ChatGPT | Beacon | remote MCP server you host ([Raise the beacon](#raise-the-beacon)) |
 
-- **The rule** tells the tool to add a log entry after meaningful work. **The local MCP server** (`waypoint mcp`, stdio) gives it four tools: `take_fix` (the overview), `read_chart` (one project), `log_watch` (append one log entry, with the tool's own id, under a lock; with `done`/`next` it also updates Done, Next and Updated in Now), and `status` (whether Waypoint is set up right: states and counts only, no paths).
+- **The rule** tells the tool to add a log entry after meaningful work. **The local MCP server** (`waypoint mcp`, stdio) gives it five tools: `take_fix` (the overview), `read_chart` (one project), `log_watch` (append one log entry, with the tool's own id, under a lock; with `done`/`next` it also updates Done, Next and Updated in Now), `status` (whether Waypoint is set up right: states and counts only, no paths), and `eod_report` (today's end-of-day email, built and read-only). It also offers three prompts (slash commands in Claude Code, as `/mcp__waypoint__<name>`, and Gemini CLI, as `/<name>`): `where_am_i`, `log_this` and `send_eod`.
 - `waypoint connect <cli>` wires one CLI at any time, for every project. Add `--project <repo>` (repeatable) to wire only that repo: the rule goes into the repo (an import, a link to the logbook's rule, or a copied block) and the MCP entry is scoped to it; files Waypoint creates there stay out of git through `.git/info/exclude`. `waypoint disconnect <cli> [--project <repo>]` removes only what Waypoint added.
 - MCP servers are registered through each CLI's own `mcp add` command where it has one (Codex and Copilot CLI per repo: Waypoint edits their repo file). If another server already uses the name `waypoint`, Waypoint registers as `waypoint-local`; `--no-mcp` installs only the rule. For Codex, Waypoint also offers to add the logbook to its sandbox's `writable_roots` (`--no-writable-root` skips it).
 - `waypoint rules` reports each tool's rule: in sync, drifted, missing, or shadowed (Codex reads an `AGENTS.override.md` instead).
@@ -86,6 +86,15 @@ If you wrote Waypoint hooks into a tool's own settings by hand, remove them once
 Under `--tool auto` the hook tells tools apart by the plugin environment (`GEMINI_SESSION_ID`, `COPILOT_PLUGIN_ROOT`, `PLUGIN_ROOT`, `CLAUDE_PLUGIN_ROOT`); don't set those globally.
 
 The plugin brings the MCP server too, so `waypoint connect <cli> --plugin` removes Waypoint's own separate MCP entry. `waypoint status` shows when each tool's hooks last ran. Turn parts off in `waypoint.toml`: `[hooks] context = false`, `nudge = false`, or `quiet = ["project"]`.
+
+## End-of-day email
+
+Optional. At the end of the day, ask your AI tool to send the day's report: type `/mcp__waypoint__send_eod` in Claude Code (`/mcp__waypoint-local__send_eod` if Waypoint is registered as `waypoint-local`) or `/send_eod` in Gemini CLI, or just say "send my EoD". Waypoint builds the email from your logbook (`eod_report`): a dark, email-safe HTML page with a plain-text twin, the Waypoint mark attached, and every log entry dated today. Your AI tool sends exactly that through [AgentMail](https://agentmail.to), which you connect once. Waypoint itself sends nothing and never sees your inbox.
+
+- `waypoint setup` can ask for your address (default No; `--yes` never asks), or run `waypoint email --to you@example.com`. It is kept in one local file; `waypoint email --forget` deletes it.
+- `waypoint email` prints the AgentMail steps for each AI tool it finds, and the address it remembers.
+- ChatGPT: type "send my EoD" in a chat that has both the Waypoint beacon and AgentMail apps. Using both apps in one chat is not yet confirmed.
+- Attention lines are never in the email; Waypoint leaves them out itself. See [Privacy](docs/PRIVACY.md).
 
 ## Reading the chart
 
@@ -114,6 +123,7 @@ Waypoint never changes a project's Status, never archives, and never writes a lo
 
 - **Nothing leaves the machine on its own.** The engine has no listener, sends no network requests, and keeps no telemetry. `--push` runs git against the remote you configured.
 - **The local MCP server answers only the AI tool that started it.** That tool sends the results to its model provider, as it does with anything it reads. Results hold project names, statuses, Summary, Done, Next and recent log entries. **Attention lines are left out** unless `waypoint.toml` sets `[mcp] include_attention = true`. Session titles, file paths, untracked folders and the feed are never returned.
+- **The end-of-day email is sent by your AI tool, only when you ask,** through AgentMail (a third party). The address stays in one local file and is given only to the tool that runs `send_eod`. Details: [`docs/PRIVACY.md`](docs/PRIVACY.md).
 - Log text is free text: what you or your tools write there goes wherever those results go. Returned text is data for the tool, never instructions.
 
 ## The three hulls
@@ -132,7 +142,7 @@ ChatGPT keeps no local history and can't start a local server. The **beacon** (`
 
 ## Spec
 
-The logbook format, the rule, the chart's JSON and every access contract are in [`docs/LOGBOOK-SPEC.md`](docs/LOGBOOK-SPEC.md) (v1.1). The story's glossary and voice are in [`docs/STORY.md`](docs/STORY.md).
+The logbook format, the rule, the chart's JSON and every access contract are in [`docs/LOGBOOK-SPEC.md`](docs/LOGBOOK-SPEC.md) (v1.5). The story's glossary and voice are in [`docs/STORY.md`](docs/STORY.md).
 
 ## Development
 

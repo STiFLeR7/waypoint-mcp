@@ -5,7 +5,7 @@ from pathlib import Path
 
 from . import __version__, chart, clis, config, logbook, project as project_mod, rules
 
-SPEC = "1.3"
+SPEC = "1.5"
 RULE_FIX = {"drifted": "run: waypoint rules --install", "missing": "run: waypoint rules --install",
             "shadowed": "run: waypoint rules --install --codex-override"}
 
@@ -65,7 +65,8 @@ def _project_installs(lb: Path, home: Path) -> dict:
 
 def collect(lb, source: str, home: Path, build=chart.build, checked=None) -> dict:
     out = {"schema": 1, "version": __version__, "spec": SPEC, "logbook": str(lb) if lb else None,
-           "logbook_source": source, "roots": [], "counts": None, "tools": {}, "sources": {}, "problems": []}
+           "logbook_source": source, "roots": [], "counts": None, "tools": {}, "sources": {}, "eod": config.eod_email_state(),
+           "problems": []}
     problems = out["problems"]
     rule_states = {}
     if lb is None:
@@ -160,6 +161,10 @@ def collect(lb, source: str, home: Path, build=chart.build, checked=None) -> dic
                                  "what": "Codex can't write the logbook (its sandbox)",
                                  "fix": f"add {lb} to [sandbox_workspace_write] writable_roots in "
                                         f"{clis.config_dir('codex', home) / 'config.toml'}"})
+    if out["eod"] == "invalid":  # the state only, never the address (spec §6)
+        problems.append({"id": "eod-email-invalid",
+                         "what": "The remembered end-of-day email address isn't a valid address",
+                         "fix": "run: waypoint email --to <address>"})
     return out
 
 
@@ -184,6 +189,7 @@ def render_text(s: dict) -> str:
                          + ("" if t["detected"] else " · not on PATH"))
             for p in t.get("projects", []):
                 lines.append(f"  {'':<{width}}  in {p['project']}: rule {p['rule']} ({p['method']}) · MCP {p['mcp']}")
+    lines.append("End-of-day email  " + ("address remembered" if s["eod"] == "remembered" else "not set up"))
     if s["sources"]:
         lines.append("Sources   " + " · ".join(f"{k} {v['state']}" for k, v in s["sources"].items()))
     if s["problems"]:

@@ -4,12 +4,12 @@
   "title": "Waypoint",
   "description": "One chart of your projects across Claude Code, Codex, Gemini CLI, Copilot CLI, ChatGPT.",
   "repository": {"url": "https://github.com/STiFLeR7/waypoint-mcp", "source": "github"},
-  "version": "0.4.0",
+  "version": "0.5.0",
   "packages": [
     {
       "registryType": "pypi",
       "identifier": "waypoint-mcp",
-      "version": "0.4.0",
+      "version": "0.5.0",
       "runtimeHint": "uvx",
       "transport": {"type": "stdio"},
       "environmentVariables": [

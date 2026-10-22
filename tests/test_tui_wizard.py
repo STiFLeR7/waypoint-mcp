@@ -145,6 +145,46 @@ class Screens(unittest.TestCase):
         self.assertEqual(w.where, {"codex": [Path(alpha)]})
         self.assertFalse(w.codex_writable)
 
+    def test_eod_screen_skips_without_tools(self):
+        wizard, w = self.wizard(lb=self.lb, tools=[])
+        self.assertEqual(wizard.screen_eod(self.ui, w), "skip")
+
+    def test_eod_screen_skip_forgets_an_earlier_answer(self):
+        wizard, w = self.wizard(lb=self.lb, tools=[])
+        w.eod_email = "you@gmail.com"  # answered Yes, then went back and unticked every tool
+        self.assertEqual(wizard.screen_eod(self.ui, w), "skip")
+        self.assertIsNone(w.eod_email)
+
+    def test_eod_screen_default_no(self):
+        wizard, w = self.wizard(lb=self.lb, tools=["codex"])
+        self.keys(ENTER)
+        self.assertEqual(wizard.screen_eod(self.ui, w), "next")
+        self.assertIsNone(w.eod_email)
+
+    def test_eod_screen_yes_then_address(self):
+        wizard, w = self.wizard(lb=self.lb, tools=["codex"])
+        self.keys(UP, ENTER, "bad", ENTER, "you@gmail.com", ENTER)
+        self.assertEqual(wizard.screen_eod(self.ui, w), "next")
+        self.assertEqual(w.eod_email, "you@gmail.com")
+        self.assertIn("not an email address", self.out.getvalue())
+        self.assertIn("codex mcp add agentmail", self.out.getvalue())
+
+    def test_eod_screen_empty_answer_returns_to_the_choice(self):
+        wizard, w = self.wizard(lb=self.lb, tools=["codex"])
+        self.keys(UP, ENTER, ENTER, ENTER)  # Yes, empty answer, then Enter on No (the cursor returns to it)
+        self.assertEqual(wizard.screen_eod(self.ui, w), "next")
+        self.assertIsNone(w.eod_email)
+
+    def test_eod_screen_prefills_and_plans_nothing(self):
+        from waypoint import config
+        config.remember_eod_email("you@gmail.com")
+        wizard, w = self.wizard(lb=self.lb, roots=[str(self.code)], tools=["codex"])
+        self.keys(UP, ENTER, ENTER)
+        self.assertEqual(wizard.screen_eod(self.ui, w), "next")
+        self.assertEqual(w.eod_email, "you@gmail.com")
+        steps = wizard.actions.wizard_plan(w.setup(), self.home)  # fake home: nothing is remembered
+        self.assertFalse([st for st in steps if "end-of-day" in st.title])
+
     def test_review_back_and_quit_write_nothing(self):
         codex_config = self.home / ".codex" / "config.toml"
         before = codex_config.read_bytes() if codex_config.exists() else None
@@ -177,6 +217,7 @@ class Screens(unittest.TestCase):
                   ENTER,               # projects: alpha pre-ticked
                   ENTER,               # tools: codex
                   ENTER, ENTER,        # global; let Codex write the logbook
+                  ENTER,               # end-of-day email: No
                   UP, ENTER,           # Review: jump to Apply
                   DOWN, ENTER)         # Done: don't open the browser
         self.assertEqual(wizard.run(self.ui, self.home), 0)

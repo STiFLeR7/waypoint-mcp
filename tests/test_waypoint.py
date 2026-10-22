@@ -499,7 +499,7 @@ class NowBehind(ChartEnv):
         spec = (Path(__file__).resolve().parents[1] / "docs" / "LOGBOOK-SPEC.md").read_text(encoding="utf-8")
         self.assertIn(r"written as `\u003c`, `\u003e`, `\u0026`, `\u2028` and `\u2029`", spec)
         self.assertFalse({"\u2028", "\u2029"} & set(spec))
-        self.assertIn("# Logbook Spec, v1.3", spec)
+        self.assertIn("# Logbook Spec, v1.5", spec)
         self.assertIn("### 7.2 Hooks (v1.3, additive)", spec)
         self.assertIn("[hooks]", spec)
         self.assertIn("`now_behind` (v1.2) is true", spec)
@@ -557,13 +557,13 @@ class Rules(Env):
 
 
 class Cli(unittest.TestCase):
-    def test_version_names_spec_1_3(self):
+    def test_version_names_spec_1_4(self):
         from waypoint import status
         out = io.StringIO()
         with redirect_stdout(out), self.assertRaises(SystemExit):
             cli.main(["--version"])
-        self.assertIn("(logbook spec v1.3)", out.getvalue())
-        self.assertEqual(status.SPEC, "1.3")
+        self.assertIn("(logbook spec v1.5)", out.getvalue())
+        self.assertEqual(status.SPEC, "1.5")
 
     def test_fix_summary_pluralization(self):
         expected = {
@@ -968,6 +968,49 @@ class AddAndSetup(Env):
         again = self.run_cli("setup", "--yes", "--logbook", str(lb), "--root", str(self.root), "--tool", "codex",
                              "--no-mcp", "--home", str(self.home))
         self.assertIn("Nothing to change.", again)  # idempotent
+
+    def numbered_setup(self, answers, *extra, yes=False):
+        lb = Path(self.tmp.name) / "fresh"
+        args = ["setup", "--logbook", str(lb), "--root", str(self.root), "--tool", "codex", "--no-mcp",
+                "--home", str(self.home), *extra]
+        with patch("builtins.input", side_effect=answers):
+            return self.run_cli(*(args + ["--yes"] if yes else args))
+
+    @patch("waypoint.rules._real_home", lambda home: True)
+    def test_setup_yes_never_asks_about_email(self):
+        out = self.numbered_setup([], yes=True)
+        self.assertNotIn("end-of-day", out)
+        self.assertFalse((self.cfg / "waypoint" / "eod-email").exists())
+
+    @patch("waypoint.rules._real_home", lambda home: True)
+    def test_numbered_setup_eod_default_no(self):
+        out = self.numbered_setup(["", "", "y"])  # git: Enter, email: Enter, write: y
+        self.assertNotIn("end-of-day", out.replace("Get an end-of-day", ""))
+        self.assertNotIn("agentmail", out)
+        self.assertFalse((self.cfg / "waypoint" / "eod-email").exists())
+
+    @patch("waypoint.rules._real_home", lambda home: True)
+    def test_numbered_setup_eod_yes_remembers_and_shows_steps(self):
+        out = self.numbered_setup(["", "y", "bad", "you@gmail.com", "y"])
+        self.assertEqual((self.cfg / "waypoint" / "eod-email").read_text(encoding="utf-8"), "you@gmail.com\n")
+        self.assertEqual(out.count("not an email address"), 1)
+        self.assertIn("codex mcp add agentmail", out)
+
+    @patch("waypoint.rules._real_home", lambda home: True)
+    def test_numbered_setup_eod_yes_then_empty_declines(self):
+        out = self.numbered_setup(["", "y", "", "y"])  # git: Enter, email: y, address: Enter, write: y
+        self.assertNotIn("not an email address", out)
+        self.assertNotIn("agentmail", out)
+        self.assertFalse((self.cfg / "waypoint" / "eod-email").exists())
+
+    @patch("waypoint.rules._real_home", lambda home: True)
+    def test_numbered_setup_keeps_the_remembered_address(self):
+        f = self.cfg / "waypoint" / "eod-email"
+        f.parent.mkdir(parents=True)
+        f.write_text("you@gmail.com\n", encoding="utf-8")
+        out = self.numbered_setup(["", "y", "", "y"])
+        self.assertIn("(already)", out)
+        self.assertEqual(f.read_text(encoding="utf-8"), "you@gmail.com\n")
 
     def test_logbook_discovery_order(self):
         from waypoint.config import find_logbook, remember_logbook
