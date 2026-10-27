@@ -3,6 +3,8 @@
 
 **Waypoint keeps one project log across your AI coding tools, so you can see where work stopped and what comes next.**
 
+**Website:** [waypoint.stifler.in](https://waypoint.stifler.in)
+
 You switch between projects and between Claude Code, Codex and ChatGPT. Each tool has its own memory, but none of them knows what the others did. Waypoint gives every tool the same record per project (what it is, where you left off, what's next, what needs attention), and shows where that record has fallen behind the actual activity.
 
 *The story:* each project is a voyage, each AI tool a navigator, and the logbook is the ship's log they all write to. The dashboard is the chart.

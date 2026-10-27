@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.1
+
+- Package metadata: PyPI Homepage and the MCP Registry `websiteUrl` now point to the website, https://waypoint.stifler.in; the README links it. No code changes.
+
 ## 0.5.0 — "Evening watch"
 
 - **End-of-day email (optional).** Ask your AI tool for it and it emails you today's work across every project through AgentMail: progress, today's log entries, Done and Next. Waypoint builds the email itself: the read-only MCP tool `eod_report` returns the subject, a plain-text body and an email-safe dark HTML body with the Waypoint mark attached, listing every log entry dated today. Attention lines are never included, whatever `[mcp] include_attention` says. The `send_eod` prompt tells your tool to send exactly that (`/mcp__waypoint__send_eod` in Claude Code, `/send_eod` in Gemini CLI, or say "send my EoD"). Waypoint itself still sends nothing.
