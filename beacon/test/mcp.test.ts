@@ -189,13 +189,18 @@ describe("mcp protocol", () => {
     const j = await (await rpc({ jsonrpc: "2.0", id: 2, method: "tools/list" })).json();
     const by = Object.fromEntries(j.result.tools.map((t: { name: string }) => [t.name, t]));
     assert.deepEqual(Object.keys(by).sort(), ["log_watch", "read_chart", "show_chart", "take_fix"]);
-    for (const n of ["take_fix", "read_chart"]) {
-      assert.equal(by[n].annotations.readOnlyHint, true);
-      assert.equal(by[n].annotations.openWorldHint, false);
+    // Every tool declares all four hints as explicit booleans (hosts and directories, OpenAI's among them, expect it).
+    for (const n of ["take_fix", "read_chart", "show_chart"]) {
+      assert.deepEqual(
+        { ...by[n].annotations, title: undefined },
+        { title: undefined, readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      );
     }
+    // log_watch can replace Done and Next (destructive), and only skips a repeat of the newest entry, so a retry after
+    // another write logs again (not idempotent; see log-watch.test.ts).
     assert.deepEqual(
       { ...by.log_watch.annotations, title: undefined },
-      { title: undefined, readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+      { title: undefined, readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
     );
     assert.deepEqual(by.log_watch.inputSchema.required, ["project", "summary"]);
     assert.deepEqual(Object.keys(by.log_watch.inputSchema.properties).sort(), ["date", "done", "next", "project", "summary", "tool"]);

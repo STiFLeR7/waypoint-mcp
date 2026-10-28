@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.2
+
+- MCP tool annotations: every tool on the local server and the beacon now declares all four hints (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) as explicit booleans. The read tools add `destructiveHint: false`. `log_watch` now says `destructiveHint: true` on both servers, because it can replace Done and Next. On the beacon it also says `idempotentHint: false`, because it only skips a repeat of the newest entry; the local server skips any identical entry that day and stays `true`. Directories such as OpenAI's reject tools missing any hint. No behaviour changes; a host may now ask before `log_watch` runs.
+
 ## 0.5.1
 
 - Package metadata: PyPI Homepage and the MCP Registry `websiteUrl` now point to the website, https://waypoint.stifler.in; the README links it. No code changes.

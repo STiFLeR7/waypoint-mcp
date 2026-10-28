@@ -17,6 +17,19 @@ TODAY = date(2026, 10, 14)
 PROJECT = "# alpha\n- Path: {path}\n- Status: active\n- Summary: {summary}\n- Attention: ATTN-SECRET\n\n## Now\n- Done: d\n- Next: n\n\n## Log\n\n### 2026-10-12 — codex\n- older\n"
 
 
+class Annotations(unittest.TestCase):
+    # MCP tool hints, each an explicit boolean matching the handler (hosts and directories, OpenAI's among them, expect
+    # all four). log_watch is destructive: it can replace Done and Next. It is idempotent here: watch.py skips any
+    # identical entry (same date, tool and text) on that date, so a retry writes nothing.
+    READ = {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False}
+    EXPECTED = {"take_fix": READ, "read_chart": READ, "status": READ, "eod_report": READ,
+                "log_watch": {"readOnlyHint": False, "destructiveHint": True, "idempotentHint": True, "openWorldHint": False}}
+
+    def test_every_tool_declares_the_right_four_hints(self):
+        got = {t["name"]: {k: v for k, v in t["annotations"].items() if k != "title"} for t in mcp.TOOLS}
+        self.assertEqual(got, self.EXPECTED)
+
+
 class Base(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

@@ -73,7 +73,7 @@ function chartPayload(d: Dashboard, cap?: number) {
   };
 }
 
-const readOnly = { readOnlyHint: true, idempotentHint: true, openWorldHint: false };
+const readOnly = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 const obj = (properties: Record<string, unknown> = {}, required: string[] = []) => ({
   type: "object",
   properties,
@@ -131,7 +131,7 @@ const TOOLS = [
       },
       ["project", "summary"],
     ),
-    annotations: { title: "Log a watch", readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    annotations: { title: "Log a watch", readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
     _meta: { ui: { visibility: ["model"] } },
   },
   {

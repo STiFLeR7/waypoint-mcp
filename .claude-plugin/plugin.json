@@ -1,6 +1,6 @@
 {
   "name": "waypoint",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Waypoint logbook for AI coding tools: the project's Now at session start, one log reminder per session, and the local MCP server.",
   "author": {"name": "STiFLeR7"},
   "homepage": "https://github.com/STiFLeR7/waypoint-mcp",

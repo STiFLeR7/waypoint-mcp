@@ -39,7 +39,7 @@ INSTRUCTIONS = (
 _obj = lambda props=None, req=(): {"type": "object", "properties": props or {}, **({"required": list(req)} if req else {}),
                                    "additionalProperties": False}
 _PROJECT = {"type": "string", "description": "Exact project name, as listed by take_fix."}
-_READ = {"readOnlyHint": True, "idempotentHint": True, "openWorldHint": False}
+_READ = {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False}
 
 TOOLS = [
     {"name": "take_fix",
@@ -71,7 +71,7 @@ TOOLS = [
          "next": {"type": "string", "minLength": 1, "maxLength": watch.NOW_MAX,
                   "description": "Optional. The new Next line for Now (one line), if this work changed it."},
      }, ["project", "summary", "tool"]),
-     "annotations": {"title": "Log a watch", "readOnlyHint": False, "destructiveHint": False, "idempotentHint": True,
+     "annotations": {"title": "Log a watch", "readOnlyHint": False, "destructiveHint": True, "idempotentHint": True,
                      "openWorldHint": False}},
     {"name": "status",
      "description": "Check this machine's Waypoint install: whether a logbook was found and how it was chosen, project counts, each AI "
