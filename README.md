@@ -1,7 +1,7 @@
 # Waypoint
 <!-- mcp-name: io.github.STiFLeR7/waypoint-mcp -->
 
-[![M8ven Score](https://m8ven.ai/badge/mcp/stifler7-waypoint-mcp-111gqq?v=cc84411e1e1e65b2a6d3bdefc394d439)](https://m8ven.ai/mcp/stifler7-waypoint-mcp-111gqq?s=readme)
+[![M8ven Score](https://m8ven.ai/badge/mcp/stifler7/waypoint-mcp)](https://m8ven.ai/mcp/stifler7/waypoint-mcp?s=readme)
 
 **Waypoint keeps one project log across your AI coding tools, so you can see where work stopped and what comes next.**
 
